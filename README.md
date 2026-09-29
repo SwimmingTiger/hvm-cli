@@ -28,25 +28,7 @@
 
 ## hvm-cli：虚拟机管理
 
-```console
-$ ./hvm-cli info
-虚拟化能力     : 支持
-活动虚拟机     : (无)
-状态码         : 0 (none)
-openEuler 版本 : (未知)
-共享目录开关   : 关
-
-$ ./hvm-cli vms                       # 列/探测虚拟机（API 无枚举接口，按名字探测）
-$ ./hvm-cli capability                # 本机是否支持虚拟化
-$ ./hvm-cli --json info               # JSON 输出，便于脚本
-$ ./hvm-cli help                      # 全部命令
-```
-
-命令覆盖：`info/status`、`vms`、`vm-info`、`capability`、`active-name/status`、
-`vm-status`、`process-exist`、`feature`、`open-euler-version`、`force-stop`、
-`quit-by-reboot-host`、`require-big-mem`、`snapshot list|create|restore|destroy|rename`、
-`share list|enable|disable|add|remove|setup`、`net ip|proxy|share-on/off|dns-on/off`、
-`disk capacity|path|size|expand|delete-data`、`resolution`、`touch-mem`、`swap-2d`。
+命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vm-info`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vm-status`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`export`、`hash-name`、`import`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
 
 ## openeuler：融合开发引擎里的 openEuler 环境
 
