@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <unistd.h>   // getuid：用 uid/200000 推导 OS 账号 id
 #include <cstring>
 #include <string>
 #include <vector>
@@ -308,13 +309,27 @@ std::string humanBytes(int64_t bytes) {
 //: 依据：实测正在安装 Windows 的虚拟机命令行里，光盘就是
 //:   file=/storage/media/100/local/files/Docs/Download/<bundle>/Win11_....iso
 //: 而 /storage/Users/... 与 hmdfs 真实路径都只对 vm_manager 可读、stratovirt 读不了。
+//: 取当前进程所属的 OS 账号 id（= 媒体库视图里的那个数字）。
+//: OpenHarmony 的 uid 编码规则是 uid = userId * 200000 + appId，所以直接整除即可：
+//:   本机 HiShell 的 uid 20020085 → 100；第二个账号下的应用会是 101xxxxx → 101。
+//: 也可以用 HVM_USER_ID 显式覆盖（例如要在别的账号视图下取文件时）。
+std::string currentUserId() {
+    if (const char *env = getenv("HVM_USER_ID")) {
+        if (*env != '\0') return env;
+    }
+    const uid_t uid = getuid();
+    const std::string derived = std::to_string(static_cast<unsigned>(uid) / 200000u);
+    if (derived == "0") {
+        // 理论上不该出现（系统进程 uid 很小）；回落到第一个账号
+        return "100";
+    }
+    return derived;
+}
+
 std::string toServicePath(const std::string &in) {
     static const char *kUserPrefix = "file://docs/storage/Users/currentUser/";
     static const char *kPlainPrefix = "/storage/Users/currentUser/";
     static const char *kMediaPrefix = "/storage/media/";
-    static const char *kUserId = "100";  // 单用户设备；可用 HVM_USER_ID 覆盖
-
-    if (const char *env = getenv("HVM_USER_ID")) kUserId = env;
 
     std::string rest;
     if (in.rfind(kUserPrefix, 0) == 0) {
@@ -324,7 +339,7 @@ std::string toServicePath(const std::string &in) {
     } else {
         return in;  // 已是服务端路径（/storage/media/... 或 /system/... 等）
     }
-    return std::string(kMediaPrefix) + kUserId + "/local/files/Docs/" + rest;
+    return std::string(kMediaPrefix) + currentUserId() + "/local/files/Docs/" + rest;
 }
 
 // ---------------------------------------------------------------- LinuxFusion / RGM 运维
@@ -597,7 +612,10 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (!bios.empty()) {
         std::string t = toServicePath(bios);
         if (t != bios) {
-            if (!g_json) printf("（路径转换）%s\n           → %s\n", bios.c_str(), t.c_str());
+            if (!g_json)
+                printf("（路径转换）%s\n           → %s\n           （账号 id=%s，由 uid %u / 200000 推导）\n",
+                       bios.c_str(), t.c_str(), currentUserId().c_str(),
+                       static_cast<unsigned>(getuid()));
             bios = t;
         }
     }

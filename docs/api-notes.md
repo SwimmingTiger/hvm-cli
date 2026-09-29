@@ -394,8 +394,18 @@ CheckWinImgPath(175)     Windows 安装镜像判定
   启动后两张光盘都出现在 stratovirt 命令行里、`vmlog` 里 `Permission denied` 计数为 0；
 - 服务端库里本来就有对应白名单正则：`^/storage/media/\d+/local/files/Docs/`；
 - `hvm-cli` 已内置转换：`/storage/Users/currentUser/<p>` 与
-  `file://docs/storage/Users/currentUser/<p>` → `/storage/media/100/local/files/Docs/<p>`
-  （环境变量 `HVM_USER_ID` 可覆盖 userId，默认 100）。
+  `file://docs/storage/Users/currentUser/<p>` → `/storage/media/<账号 id>/local/files/Docs/<p>`。
+
+  路径里的那个数字是 **OS 账号 id（不是登录名）**，多账号设备上第二个账号是 101。
+  `hvm-cli` 不写死它，而是按 OpenHarmony 的 uid 编码规则推导：
+
+  ```
+  uid = userId * 200000 + appId        →  userId = uid / 200000
+  例：HiShell 的 20020085 / 200000 = 100；第二账号下的应用 202xxxxx → 101
+  ```
+
+  也可用 `HVM_USER_ID=101` 显式覆盖（例如要引用别的账号视图下的文件）。
+  预演时会打印推导结果：`（账号 id=100，由 uid 20020085 / 200000 推导）`。
 
 ### 10.2 为什么另外两种写法不行
 
