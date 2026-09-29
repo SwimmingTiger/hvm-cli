@@ -114,22 +114,21 @@ void usage() {
         "\n"
         "虚拟机生命周期（CfgInfo 为逆向手工构造，见 docs/api-notes.md）：\n"
         "  vm ctor   [选项]        仅构造 CfgInfo 并打印（验证用，不调服务）\n"
-        "  vm create --name N --image P [选项] [--apply]\n"
-        "  vm start  --name N [选项] [--apply]\n"
+        "  vm create --name N --image P [选项]\n"
+        "  vm start  --name N [选项]\n"
         "  vm view-state <0|1|2>              上报 HapViewState（应用用它告知视图状态）\n"
         "  vm displays <id[,id...]>           把显示器 id 列表交给服务端\n"
         "  vm serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
         "  vm serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
         "  vm range                查询可用的 CPU / 内存范围（服务端校验依据）\n"
-        "  vm import --name N --src SRC --dst DST [--apply] 让服务端拷贝文件（搬 ISO）\n"
-        "  vm mount-cd   --name N --image X.iso [--apply]   挂载安装光盘\n"
-        "  vm unmount-cd --name N --image X.iso [--apply]   卸载\n"
+        "  vm import --name N --src SRC --dst DST  让服务端拷贝文件（搬 ISO）\n"
+        "  vm mount-cd   --name N --image X.iso   挂载安装光盘\n"
+        "  vm unmount-cd --name N --image X.iso   卸载\n"
         "  vm destroy N            销毁虚拟机\n"
         "    选项: --cpu N --mem GB --disk MB | --disk-gb GB\n"
         "          --bios PATH --enhance PATH --start-type N --partition --dynamic-mem\n"
         "    单位（实测）：memorySize 为 GB（范围见 vm range），diskSize 为 MB 且 >= 65536\n"
         "          --start-type N --partition --dynamic-mem\n"
-        "    注意: 不带 --apply 时为预演，不产生副作用\n"
         "  pause / resume [名字]   暂停 / 恢复虚拟机\n"
         "  lock-guest              锁定客户机（LockGuest）\n"
         "  lx-ota                  Linux 环境 OTA（LxOtaHandle）\n"
@@ -566,7 +565,7 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     const std::string act = pos[0];
     std::string name, image, bios, enhance;
     int cpu = 0, mem = 0, disk = 0, startType = -1;
-    bool partition = false, dynMem = false, apply = false;
+    bool partition = false, dynMem = false;
     bool keepSnapshots = false, forceImport = false;
     std::string password;
     std::string chanName = "winbox_serial0";
@@ -576,7 +575,6 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
 
     for (std::size_t i = 1; i < pos.size(); ++i) {
         const std::string &k = pos[i];
-        if (k == "--apply") { apply = true; continue; }
         if (k == "--keep-snapshots") { keepSnapshots = true; continue; }
         if (k == "--force-import") { forceImport = true; continue; }
         if (k == "--partition") { partition = true; continue; }
@@ -716,16 +714,11 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (act == "export") {
         // 把虚拟机磁盘导出到用户可访问的位置（调查服务端期望的 qcow2 格式）
         if (name.empty() || bios.empty() || enhance.empty()) {
-            fprintf(stderr, "用法: hvm-cli vm export --name N --src <服务端磁盘路径> --dst <用户区路径> [--apply]\n");
+            fprintf(stderr, "用法: hvm-cli vm export --name N --src <服务端磁盘路径> --dst <用户区路径>\n");
             return 2;
         }
         hvm::MigrationOptionsBuilder opts;
         if (!opts.ok()) return fail("vm export", -1, "构造 MigrationOptions 失败: " + opts.lastError());
-        if (!apply) {
-            printf("（预演）将调用 ExportVmDiskImage\n  虚拟机: %s\n  src : %s\n  dst : %s\n",
-                   name.c_str(), bios.c_str(), enhance.c_str());
-            return 0;
-        }
         int rc = c.exportVmDiskImage(name, bios, enhance, false, opts.raw());
         if (rc != 0)
             return fail("vm export", rc,
@@ -739,7 +732,7 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         // 让服务端把文件拷到指定位置（用于把 ISO 搬进 stratovirt 能读的服务数据区）
         if (name.empty() || bios.empty() || enhance.empty()) {
             fprintf(stderr,
-                    "用法: hvm-cli vm import --name <vm> --src <源路径> --dst <目标路径> [--apply]\n"
+                    "用法: hvm-cli vm import --name <vm> --src <源路径> --dst <目标路径>\n"
                     "      （--src 与 --bios 同义，--dst 与 --enhance 同义）\n");
             return 2;
         }
@@ -749,13 +742,6 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         opts.setKeepSnapshots(keepSnapshots);
         opts.setForceImport(forceImport);
         if (!password.empty()) opts.setPassword(password);
-        if (!apply) {
-            printf("（预演）将调用 ImportVmDiskImage\n  虚拟机: %s\n  src : %s\n  dst : %s\n",
-                   name.c_str(), bios.c_str(), enhance.c_str());
-            fputs(opts.dump().c_str(), stdout);
-            printf("\n真正执行请加 --apply\n");
-            return 0;
-        }
         int rc = c.importVmDiskImage(name, bios, enhance, opts.raw());
         if (rc != 0)
             return fail("vm import", rc,
@@ -836,16 +822,6 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         if (act == "create" && image.empty()) {
             fprintf(stderr, "create 需要 --image <镜像路径>（服务端 CreateVm 的第 2 个字符串）\n");
             return 2;
-        }
-        if (!apply) {
-            printf("（预演）将调用 %s\n", act == "create" ? "CreateVm" : "StartVm");
-            printf("  虚拟机名   : %s\n", name.c_str());
-            if (haveCpuRange) printf("  可用 CPU   : %u..%u\n", cmin, cmax);
-            if (haveMemRange) printf("  可用内存   : %u..%u GB\n", mmin, mmax);
-            if (act == "create") printf("  镜像路径   : %s\n", image.c_str());
-            fputs(cfg.dump().c_str(), stdout);
-            printf("\n以上为将要发送的内容；真正执行请加 --apply\n");
-            return 0;
         }
         int rc = (act == "create") ? c.createVm(name, image, cfg.raw())
                                    : c.startVm(name, cfg.raw());

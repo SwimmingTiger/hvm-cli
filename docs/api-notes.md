@@ -363,7 +363,7 @@ hvm::CfgInfoBuilder::setCpuNum(int):
   --image   /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/Win11_....iso \
   --enhance /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/oetool.iso \
   --bios /system/opt/virt_service/virtualized_hwf/stratovirt-vars \
-  --cpu 6 --mem 8 --disk-gb 128 --apply
+  --cpu 6 --mem 8 --disk-gb 128
 ```
 
 创建后：
@@ -442,7 +442,7 @@ CheckWinImgPath(175)     Windows 安装镜像判定
   3. 回落到 OpenHarmony 的 uid 编码规则推导：`userId = uid / 200000`
      （HiShell 的 20020085 → 100；第二账号下的应用 202xxxxx → 101）。
 
-  预演时会打印实际取值：`（账号 id=100，取自 $USER（回落到 uid 20020085 / 200000））`。
+  发生转换时会打印一行提示：`（账号 id=100，取自 $USER（回落到 uid 20020085 / 200000））`。
 
 ### 10.2 为什么另外两种写法不行
 

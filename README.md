@@ -96,7 +96,7 @@ $ ./hvm-cli vm create \
       --name myvm \
       --image /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
       --bios  /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
-      --cpu 6 --mem 8 --disk-gb 128 --apply
+      --cpu 6 --mem 8 --disk-gb 128
 CreateVm 返回 rc=0 (OK)
 ```
 
@@ -106,16 +106,15 @@ CreateVm 返回 rc=0 (OK)
   账号 id（这里是 `100`）取自 `$USER`，多账号设备上第二个账号是 `101`；
 - **磁盘不用自己准备**：框架按 `--disk-gb` 生成稀疏的
   `/data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2`；
-- 不带 `--apply` 就是**预演**，只打印将要发送的内容、不产生副作用：
+- 想先看服务端会收到什么（不产生副作用）用 `vm ctor`：它只构造并打印 `CfgInfo`，不调服务端：
 
   ```console
-  $ ./hvm-cli vm create --name myvm --image /storage/Users/currentUser/Download/.../debian-12.0.0-arm64-netinst.iso \
-        --bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi --cpu 6 --mem 8 --disk-gb 128
-  （预演）将调用 CreateVm
-    虚拟机名   : myvm
-    可用 CPU   : 6..8
-    可用内存   : 6..18 GB
-    镜像路径   : /storage/media/100/local/files/Docs/Download/.../debian-12.0.0-arm64-netinst.iso
+  $ ./hvm-cli vm ctor --cpu 6 --mem 8 --disk-gb 128
+  CfgInfo@0x... base=0x... vptr=0x...(base+0xB2F90)
+    cpuNum(+12)        = 6
+    memorySize(+16)    = 8 GB
+    diskSize(+20)      = 131072 MB
+    ...
   ```
 
 ### 3. 启动（开机）
@@ -123,7 +122,7 @@ CreateVm 返回 rc=0 (OK)
 ```console
 $ ./hvm-cli vm start --name myvm \
       --bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
-      --cpu 6 --mem 8 --disk-gb 128 --apply
+      --cpu 6 --mem 8 --disk-gb 128
 ```
 
 启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
@@ -224,7 +223,8 @@ if=none,id=unattend,format=raw,media=cdrom,readonly=true,file=/storage/media/100
 路径里的数字是 **OS 账号 id**，本机 HiShell 终端里就是环境变量 **`$USER`（=100）**。
 工具优先直接读 `$USER`（要求纯数字），拿不到时回落到 `uid / 200000` 推导
 （HiShell 的 20020085 → 100；第二账号下的应用 202xxxxx → 101），
-也可用 `HVM_USER_ID` 显式覆盖；预演时会打印实际取值。
+也可用 `HVM_USER_ID` 显式覆盖；发生转换时会打印一行提示，例如
+`（账号 id=100，取自 $USER（回落到 uid 20020085 / 200000））`。
 
 磁盘**不需要**自己准备 qcow2 —— 框架会按 `CfgInfo.diskSize` 自行创建：
 
