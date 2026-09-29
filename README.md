@@ -4,6 +4,12 @@
 
 **不需要 root、不需要 HAP** —— 全部通过 `dlopen` 直接调用系统自带库。
 
+> ⚠️ **必须在系统自带的 HiShell 终端中运行。**
+> 这两个命令调用的都是受限系统能力，服务端会校验调用者身份：`vm_manager` 的白名单
+> 只放行 HiShell HAP、LinuxFusionService(uid 5005)、hwf_service(uid 7700) 与
+> openEuler HAP；第三方应用（MKCode / BitFun / WorkBuddy / CodeArts Agent 等）的
+> 内置终端会被拒绝并返回 `permission denied`。详见[权限模型](#权限模型)。
+
 本仓库构建**两个命令**，对应两条完全独立的技术栈：
 
 | 命令 | 用途 | 底层通路 |
@@ -108,6 +114,8 @@ isOpenEulerHap:%d`）。因此从系统自带终端 **HiShell** 启动的进程�
 
 反过来，从 MKCode / BitFun / WorkBuddy / CodeArts Agent 等第三方应用的内置终端
 启动会被拒绝（`permission denied`）。
+
+**结论：本工具只能在系统自带的 HiShell 终端里运行。**
 
 ## 构建
 

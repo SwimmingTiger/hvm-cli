@@ -78,6 +78,10 @@ isLinuxFusionService:%d, isHiShellHap:%d, isOpenEulerHap:%d
 
 被拒绝时服务端会打 `... permission denied` 日志（hilog）。
 
+**结论：本仓库的两个命令都只能在系统自带的 HiShell 终端里运行。**
+（`openeuler` 走的融合开发引擎通道同样受身份限制，其 `libfusion_pty_common.z.so`
+里也带着 `com.huawei.hmos.hishell` 这个包名。）
+
 ## 4. 客户端 ABI 注意事项
 
 - **libc++ inline namespace 是 `std::__h`**（不是 `__1`）：
