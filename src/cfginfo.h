@@ -1,0 +1,48 @@
+// cfginfo.h —— 手工构造 CfgInfo（华为私有无头文件类型）
+//
+// 该类的构造函数被内联展开且库被 strip，无法 dlsym，因此按逆向出的序列
+// 逐字节构造。配方与偏移见 include/ohos/vm_manager_service/cfg_info.h。
+#ifndef HVM_CFGINFO_H
+#define HVM_CFGINFO_H
+
+#include <cstdint>
+#include <string>
+
+namespace hvm {
+
+class CfgInfoBuilder {
+  public:
+    CfgInfoBuilder();
+    ~CfgInfoBuilder();
+    CfgInfoBuilder(const CfgInfoBuilder &) = delete;
+    CfgInfoBuilder &operator=(const CfgInfoBuilder &) = delete;
+
+    bool ok() const { return obj_ != nullptr; }
+    const std::string &lastError() const { return error_; }
+
+    // 以下 setter 的字段语义来自 libvmmanager_napi.z.so 的 UnwrapBaseCfgInfo
+    void setCpuNum(int v);                    // +12
+    void setMemorySizeMb(int v);              // +16
+    void setDiskSizeGb(int v);                // +20
+    void setDiskPartition(bool v);            // +24
+    void setDynamicMemory(bool v);            // +25
+    void setBiosPath(const std::string &v);   // +32  string
+    void setEnhanceFilePath(const std::string &v);  // +56  string
+    void setStartType(int v);                 // +80  默认 -1，合法 0..3
+
+    //: 生成对象的可读摘要（字段当前值）
+    std::string dump() const;
+
+    //: 裸指针（作为 CfgInfo* 传给 VM manager 客户端接口）
+    void *raw() const { return obj_; }
+
+  private:
+    void *lib_ = nullptr;   // napi 库句柄（不 dlclose）
+    char *base_ = nullptr;  // napi 库加载基址
+    void *obj_ = nullptr;
+    std::string error_;
+};
+
+}  // namespace hvm
+
+#endif  // HVM_CFGINFO_H

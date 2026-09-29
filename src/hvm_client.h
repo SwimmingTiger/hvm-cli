@@ -72,6 +72,15 @@ class Client {
     int isInstalling();
     VmInfo info();
 
+    // ------------------------------------------------------------ 生命周期
+    //: 创建虚拟机。cfgObj 为 CfgInfoBuilder 构造出的对象（见 src/cfginfo.h）
+    int createVm(const std::string &name, const std::string &imagePath, void *cfgObj);
+    //: 启动已创建的虚拟机
+    int startVm(const std::string &name, void *cfgObj);
+    //: 销毁虚拟机（不需要 CfgInfo）
+    int destroyVm(const std::string &name);
+    int stopVm(const std::string &name, bool clean);
+
     // ------------------------------------------------------------ 电源
     int forceStop(const std::string &vm);
     int quitByRebootHost();

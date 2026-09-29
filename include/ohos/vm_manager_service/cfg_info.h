@@ -87,43 +87,58 @@ inline constexpr FieldInfo kObjectFields[] = {
 /* ------------------------------------------------------------ 构造配方 */
 
 /**
- * CfgInfo 没有独立构造函数（被内联展开），因此需要按 [N] OnCreateVm 的原始序列手工构造：
+ * CfgInfo 没有独立构造函数（被内联展开），需按下面的序列手工构造。
+ * 该序列逐条取自 [N] 中内联构造现场的反汇编（0xA848C~0xA851C）：
  *
- *   p = operator new(0x300)            ; memset(p, 0, 0x300)
- *   RefBase::RefBase(p + 752)          ; 内嵌 RefBase
- *   Parcelable::Parcelable(p)          ; 基类
- *   *(int32*)(p + 80) = -1             ; startType 默认值
- *   *(void**)p        = *(void**)(baseN + napi::kVtableSlotCfgInfo)      ; CfgInfo vptr
- *   *(void**)(p + 752)= *(void**)(baseN + napi::kVtableSlotCfgRefBase)   ; RefBase vptr
- *   DeviceInfo::DeviceInfo(p + 88)     ; 内嵌 DeviceInfo
- *   Parcelable::Parcelable(p + 696)    ; 内嵌 BundleInfo 的 Parcelable 基类
- *   RefBase::RefBase(p + 736)          ; 内嵌 BundleInfo 的 RefBase
- *   *(void**)(p + 696)= *(void**)(baseN + napi::kVtableSlotBundleRefBase)
- *   *(void**)(p + 736)= &typeid(BundleInfo)      ; 见 napi::kTypeidBundleInfo
- *   RefBase::IncStrongRef(p + 752, &holder)      ; 交给 sptr 持有
+ *   p = operator new(0x300); memset(p, 0, 0x300)
+ *   RefBase::RefBase(p + 752)                       ; 内嵌 RefBase（libutils 导入）
+ *   Parcelable::Parcelable(p, napi::kVttCfgInfo)    ; 注意第 2 参数是 VTT！
+ *   *(int64*)(p + 12) = 0
+ *   *(void**)p = baseN + napi::kVtableCfgInfo       ; CfgInfo 主 vtable
+ *   *(void**)(p + 752) = baseN + napi::kVtableCfgRefBase
+ *   *(int64*)(p + 18) = 0 ; 清零 +32..+63 ; 清零 +64..+79
+ *   *(int32*)(p + 80) = -1                          ; startType 默认值
+ *   DeviceInfo::DeviceInfo(p + 88)                  ; napi 库本地函数，无 VTT 参数
+ *   RefBase::RefBase(p + 736)                       ; 内嵌 BundleInfo 的 RefBase
+ *   Parcelable::Parcelable(p + 696, napi::kVttBundleInfo)
+ *   *(void**)(p + 696) = baseN + napi::kVtableBundleInfo
+ *   *(void**)(p + 736) = baseN + napi::kVtableBundleRefBase
  *
- * 其中 3 个 vptr 槽位是数据槽（.data.rel.ro 中的指针），
- * 必须从「已加载的库内存」里取值（磁盘上是 ANDROID_RELA 压缩重定位，静态读不到）。
+ * 两个关键点：
+ *  1) 写进对象首字的是 vtable 地址点本身（baseN + 偏移），不是该地址处的内容；
+ *     vtable+96 即同一类的"虚基类 RefBase"次虚表（已核对：0xB2F90+96 = 0xB2FF0）。
+ *  2) Parcelable 有虚基类，其构造函数签名是 (void* this, void* vtt)；
+ *     只传 this 会因 x1 为垃圾值而崩溃 —— 这是本仓库实测踩过的坑。
  */
 namespace napi {
 
 /** 用于换算 [N] 运行时基址的锚点：OHOS::HmosWindowsFusion::WindowsClient::delegator_ */
 constexpr std::uintptr_t kBaseAnchorDelegator = 0xBD020;
 
-/* --- 数据槽（取其中的指针值） --- */
-constexpr std::uintptr_t kVtableSlotCfgInfo = 0xB2F90;
-constexpr std::uintptr_t kVtableSlotCfgRefBase = 0xB2FF0;
-constexpr std::uintptr_t kVtableSlotBundleRefBase = 0xB44F0;
-constexpr std::uintptr_t kTypeidDeviceInfo = 0xB3110;
-constexpr std::uintptr_t kTypeidBundleInfo = 0xB4490;
+/* --- vtable 地址点（已核验为标准 Itanium 布局：D1/D0/Marshalling…） --- */
+constexpr std::uintptr_t kVtableCfgInfo = 0xB2F90;         // CfgInfo 主 vtable
+constexpr std::uintptr_t kVtableCfgRefBase = 0xB2FF0;      // = kVtableCfgInfo + 96
+constexpr std::uintptr_t kVtableBundleInfo = 0xB4490;      // BundleInfo 主 vtable
+constexpr std::uintptr_t kVtableBundleRefBase = 0xB44F0;   // = kVtableBundleInfo + 96
+constexpr std::uintptr_t kVtableDeviceInfo = 0xB3110;      // DeviceInfo 主 vtable（供参考）
 
-/* --- 函数（可直接按地址调用，签名见下） --- */
-constexpr std::uintptr_t kFnRefBaseCtor = 0xBDCB0;         // void RefBase(void* this)
-constexpr std::uintptr_t kFnParcelableCtor = 0xBDCB8;      // void Parcelable(void* this)
-constexpr std::uintptr_t kFnRefBaseIncStrong = 0xBDE68;    // void IncStrongRef(void* this, void** out)
-constexpr std::uintptr_t kFnDeviceInfoCtor = 0x65C48;      // void DeviceInfo::DeviceInfo(void* this)
+/* --- 虚基类 VTT：Parcelable::Parcelable(this, vtt) 的第 2 个参数 --- */
+constexpr std::uintptr_t kVttCfgInfoParcelable = 0xB0498;
+constexpr std::uintptr_t kVttBundleInfoParcelable = 0xB0658;
+
+/* --- [N] 库内的本地函数（位于 .text，可直接按地址调用） --- */
+constexpr std::uintptr_t kFnDeviceInfoCtor = 0x65C48;      // void DeviceInfo::DeviceInfo(void*)
 constexpr std::uintptr_t kFnDeviceInfoDtor = 0x66E7C;
 constexpr std::uintptr_t kFnDeviceInfoAssign = 0x663B4;
+
+/*
+ * RefBase / Parcelable 的构造函数不是本库定义的，而是 [N] 的导入符号
+ * （由 libutils.z.so 提供），因此用 dlsym 取地址：
+ *   _ZN4OHOS7RefBaseC2Ev       void RefBase::RefBase(void* this)
+ *   _ZN4OHOS10ParcelableC2Ev   void Parcelable::Parcelable(void* this, void* vtt)
+ * 提示：[N] 的 .gnu_debugdata 里也能查到 "OHOS::RefBase::RefBase(void)" 之类名字，
+ *       但它们指向 .bss 中的槽位（不是代码），照地址调用会段错误。
+ */
 
 }  // namespace napi
 

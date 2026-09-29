@@ -9,7 +9,9 @@
 #include <string>
 #include <vector>
 
+#include "cfginfo.h"
 #include "hvm_client.h"
+#include "ohos/vm_manager_service/vm_manager_errcode.h"
 
 namespace {
 
@@ -101,6 +103,15 @@ void usage() {
         "  selftest                客户端 kit 加载自检\n"
         "  info                    汇总状态（能力/活动 VM/版本/共享目录）\n"
         "  vms [名字...]           列出/探测虚拟机（无枚举接口，按名字探测）\n"
+        "\n"
+        "虚拟机生命周期（CfgInfo 为逆向手工构造，见 docs/api-notes.md）：\n"
+        "  vm ctor   [选项]        仅构造 CfgInfo 并打印（验证用，不调服务）\n"
+        "  vm create --name N --image P [选项] [--apply]\n"
+        "  vm start  --name N [选项] [--apply]\n"
+        "  vm destroy N            销毁虚拟机\n"
+        "    选项: --cpu N --mem MB --disk GB --bios PATH --enhance PATH\n"
+        "          --start-type N --partition --dynamic-mem\n"
+        "    注意: 不带 --apply 时为预演，不产生副作用\n"
         "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
         "  stratovirt-mem          stratoVirt 占用内存\n"
         "  host-sn                 宿主 SN\n"
@@ -248,6 +259,107 @@ std::string humanBytes(int64_t bytes) {
         }                                                                            \
     } while (0)
 
+// ---------------------------------------------------------------- vm 子命令
+//: CfgInfo 是华为私有类型（无公开头文件），这里按逆向配方手工构造。
+int cmdVm(Client &c, const std::vector<std::string> &pos) {
+    if (pos.empty()) {
+        fprintf(stderr, "用法: hvm-cli vm ctor|create|start|destroy [选项]\n");
+        return 2;
+    }
+    const std::string act = pos[0];
+    std::string name, image, bios, enhance;
+    int cpu = 0, mem = 0, disk = 0, startType = -1;
+    bool partition = false, dynMem = false, apply = false;
+
+    for (std::size_t i = 1; i < pos.size(); ++i) {
+        const std::string &k = pos[i];
+        if (k == "--apply") { apply = true; continue; }
+        if (k == "--partition") { partition = true; continue; }
+        if (k == "--dynamic-mem") { dynMem = true; continue; }
+        if (k.size() != 0 && k[0] != '-') { name = k; continue; }
+        if (i + 1 >= pos.size()) { fprintf(stderr, "%s 缺少取值\n", k.c_str()); return 2; }
+        const std::string v = pos[++i];
+        if (k == "--name") name = v;
+        else if (k == "--image") image = v;
+        else if (k == "--bios") bios = v;
+        else if (k == "--enhance") enhance = v;
+        else if (k == "--cpu") cpu = atoi(v.c_str());
+        else if (k == "--mem") mem = atoi(v.c_str());
+        else if (k == "--disk") disk = atoi(v.c_str());
+        else if (k == "--start-type") startType = atoi(v.c_str());
+        else { fprintf(stderr, "未知选项: %s\n", k.c_str()); return 2; }
+    }
+
+    hvm::CfgInfoBuilder cfg;
+    if (!cfg.ok()) return fail("vm " + act, -1, "构造 CfgInfo 失败: " + cfg.lastError());
+    cfg.setCpuNum(cpu);
+    cfg.setMemorySizeMb(mem);
+    cfg.setDiskSizeGb(disk);
+    cfg.setDiskPartition(partition);
+    cfg.setDynamicMemory(dynMem);
+    if (!bios.empty()) cfg.setBiosPath(bios);
+    if (!enhance.empty()) cfg.setEnhanceFilePath(enhance);
+    cfg.setStartType(startType);
+
+    if (act == "ctor") {
+        // 只验证构造配方，不碰服务端
+        if (g_json) {
+            Json j("vm ctor");
+            j.str("dump", cfg.dump()).raw("rawPtr", "null");
+            printf("%s\n", j.ok().c_str());
+        } else {
+            fputs(cfg.dump().c_str(), stdout);
+            fputc('\n', stdout);
+        }
+        return 0;
+    }
+
+    if (act == "destroy") {
+        if (name.empty()) { fprintf(stderr, "destroy 需要虚拟机名\n"); return 2; }
+        int rc = c.destroyVm(name);
+        if (rc != 0)
+            return fail("vm destroy", rc,
+                        std::string("DestroyVm 失败: ") + ohos_vm_error_name(rc));
+        if (g_json) { Json j("vm destroy"); j.str("name", name); printf("%s\n", j.ok().c_str()); }
+        else printf("已销毁 %s\n", name.c_str());
+        return 0;
+    }
+
+    if (act == "create" || act == "start") {
+        if (name.empty()) { fprintf(stderr, "%s 需要 --name <虚拟机名>\n", act.c_str()); return 2; }
+        if (act == "create" && image.empty()) {
+            fprintf(stderr, "create 需要 --image <镜像路径>（服务端 CreateVm 的第 2 个字符串）\n");
+            return 2;
+        }
+        if (!apply) {
+            printf("（预演）将调用 %s\n", act == "create" ? "CreateVm" : "StartVm");
+            printf("  虚拟机名   : %s\n", name.c_str());
+            if (act == "create") printf("  镜像路径   : %s\n", image.c_str());
+            fputs(cfg.dump().c_str(), stdout);
+            printf("\n以上为将要发送的内容；真正执行请加 --apply\n");
+            return 0;
+        }
+        int rc = (act == "create") ? c.createVm(name, image, cfg.raw())
+                                   : c.startVm(name, cfg.raw());
+        if (rc != 0 && rc != 1)  // 1 也可能表示“已启动”之类，先按错误码如实报
+            return fail("vm " + act, rc,
+                        std::string(act == "create" ? "CreateVm" : "StartVm") + " 返回: " +
+                            ohos_vm_error_name(rc) + " (" + std::to_string(rc) + ")");
+        if (g_json) {
+            Json j("vm " + act);
+            j.str("name", name).num("rc", rc);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s 返回 rc=%d (%s)\n", act == "create" ? "CreateVm" : "StartVm", rc,
+                   ohos_vm_error_name(rc));
+        }
+        return 0;
+    }
+
+    fprintf(stderr, "未知 vm 动作: %s\n", act.c_str());
+    return 2;
+}
+
 int run(int argc, char **argv) {
     if (argc < 2) {
         usage();
@@ -374,6 +486,8 @@ int run(int argc, char **argv) {
         }
         return 0;
     }
+
+    if (cmd == "vm") return cmdVm(c, a.pos);
 
     if (cmd == "info" || cmd == "status") return cmdInfo(c);
 

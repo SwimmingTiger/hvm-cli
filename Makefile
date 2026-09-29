@@ -16,8 +16,8 @@ LDLIBS   ?= -ldl
 BIN_VM   := hvm-cli
 BIN_OE   := openeuler
 
-VM_SRCS  := src/hvm_client.cpp src/main.cpp
-VM_HDRS  := src/hvm_client.h
+VM_SRCS  := src/hvm_client.cpp src/cfginfo.cpp src/main.cpp
+VM_HDRS  := src/hvm_client.h src/cfginfo.h
 OE_SRCS  := src/fusion_pty.cpp src/openeuler_main.cpp
 OE_HDRS  := src/fusion_pty.h
 

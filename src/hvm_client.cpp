@@ -205,6 +205,58 @@ VmInfo Client::info() {
     return vi;
 }
 
+// ---------------------------------------------------------------------- 生命周期
+int Client::createVm(const std::string &name, const std::string &imagePath, void *cfgObj) {
+    // 符号：...8CreateVmERKNSt3__h...EESA_RKNS_4sptrINS0_7CfgInfoEEE
+    // 第 4 参是 const sptr<CfgInfo>&，而 sptr 的内存布局就是单个指针，
+    // 因此传入「指向该指针的指针」即 ABI 等价。
+    using Fn = int (*)(void *, const std::string &, const std::string &, const void *);
+    auto f = resolve<Fn>(std::string(kWrapper) + "8CreateVm" + kStringConst +
+                         "SA_RKNS_4sptrINS0_7CfgInfoEEE");
+    if (f == nullptr) return kErrNoSymbol;
+    void *holder = cfgObj;
+    try {
+        return f(instance_, name, imagePath, &holder);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::startVm(const std::string &name, void *cfgObj) {
+    using Fn = int (*)(void *, const std::string &, const void *);
+    auto f = resolve<Fn>(std::string(kWrapper) + "7StartVm" + kStringConst +
+                         "RKNS_4sptrINS0_7CfgInfoEEE");
+    if (f == nullptr) return kErrNoSymbol;
+    void *holder = cfgObj;
+    try {
+        return f(instance_, name, &holder);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::destroyVm(const std::string &name) {
+    using Fn = int (*)(void *, const std::string &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "9DestroyVm" + kStringConst);
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, name);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::stopVm(const std::string &name, bool clean) {
+    using Fn = int (*)(void *, const std::string &, bool);
+    auto f = resolve<Fn>(std::string(kWrapper) + "6StopVm" + kStringConst + "b");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, name, clean);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
 // ---------------------------------------------------------------------- 电源
 int Client::forceStop(const std::string &vm) {
     using Fn = int (*)(void *, const std::string &);
