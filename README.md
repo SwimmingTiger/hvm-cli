@@ -117,6 +117,18 @@ make check      # 分别自检两条通路
 make install    # 可选，装到 ~/.local/bin
 ```
 
+## 调试
+
+系统自带的 lldb-server 在应用沙箱里 `ptrace` 会被拒；用华为随开发者工具提供的
+`~/.local/bin/huawei-debug-lldb-server` 即可正常调试（脚本已封装）：
+
+```console
+$ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
+```
+
+进程由 lldb-server 预先拉起并停在动态链接器入口，所以下完断点用 `continue`
+恢复，不要用 `run`。
+
 ## 目录结构
 
 | 路径 | 说明 |
@@ -125,7 +137,8 @@ make install    # 可选，装到 ~/.local/bin
 | `src/main.cpp` | `hvm-cli` 命令入口 |
 | `src/fusion_pty.h/.cpp` | LinuxFusion PTY 通道封装 |
 | `src/openeuler_main.cpp` | `openeuler` 命令入口 |
-| `docs/api-notes.md` | 逆向笔记：SA、白名单、PTY 通道 C ABI、已知返回码 |
+| `docs/api-notes.md` | 逆向笔记：SA、白名单、PTY 通道 C ABI、CfgInfo 构造、已知返回码 |
+| `scripts/hwdbg.sh` | 沙箱内可用的 lldb 调试封装（华为 lldb-server） |
 
 ## 实现状态
 

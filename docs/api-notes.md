@@ -271,17 +271,36 @@ vm_manager [DetectIsoType:148]   file is not iso.                ← 镜像类�
 vm_manager [CheckWinImgPath:175] not image
 ```
 
-### 调试器不可用（记录备查）
+### 调试器：用华为自带的 lldb-server
 
-本机 `lldb` / `lldb-server` 在两种身份下都用不了：
+系统自带 `/data/service/hnp/bin/lldb-server` 在当前身份下会
+`ptrace failed: Permission denied`（应用沙箱禁 ptrace），
+`hdc shell`（uid 2000）又处在另一个挂载命名空间、且 `/data/local/tmp` 不可执行。
 
-| 身份 | 结果 |
-|---|---|
-| app uid（HiShell 沙箱） | `ptrace failed: Permission denied` |
-| `hdc shell`（uid 2000） | 不同挂载命名空间：看不到 `/storage/Users`、`/data/service/hnp`；二进制推进 `/data/local/tmp` 后 exec 被拒；无 `su` |
+**可行方案**：华为随开发者工具提供的
+`~/.local/bin/huawei-debug-lldb-server`（只依赖 musl libc 的自包含版本），
+可以正常拉起进程被 lldb 调试。仓库脚本：
 
-因此定位这类问题要走**静态分析**（本次正是靠反汇编 0xA848C 处的内联构造现场
-发现了 VTT 参数）。
+```bash
+scripts/hwdbg.sh ./hvm-cli 7799                       # 起服务并连上 lldb
+scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue
+```
+
+要点：进程由 lldb-server **预先拉起并停在动态链接器入口**，
+所以下完断点要用 `continue` 恢复，**不要用 `run`**。
+
+验证示例（断在 `CfgInfoBuilder::setCpuNum`）：
+
+```asm
+hvm::CfgInfoBuilder::setCpuNum(int):
+  ldr x8, [x0, #0x10]     ; x8 = builder->obj_
+  str w1, [x8, #0xc]      ; *(int*)(obj_ + 12) = cpuNum
+  ret
+```
+
+即运行时写入的偏移与逆向结论 `cpuNum@+12` 完全一致。
+调试动态库时可用 `image list -f -o` 取加载基址，
+再加逆向出的静态偏移下断点（`br set -a <base+offset>`）。
 
 ### 仍未完成
 
