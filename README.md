@@ -142,9 +142,11 @@ $ ./hvm-cli --vm win11 disk path
 > **实测已能完整创建虚拟机**（`CreateVm` 返回 0）：活动 VM 变成新名字、
 > 框架自动生成磁盘 `.../vm_manager/<hash>/<vm>/img/vm.qcow2`（稀疏，随写增长）。
 
-> ⚠️ **但安装介质挂不上**：服务端把 ISO 路径交给 `stratovirt` 打开时，
-> 后者处于独立 SELinux 域 `ohsw_stratovirt`，只能读服务数据区；
-> 用户存储（hmdfs）、应用沙箱、`/data/local/tmp`、`/dev/shm` 全部 `Permission denied`。
+> ✅ **安装介质能挂上**（实测）：ISO 路径写成上面那种**媒体库视图**即可 ——
+> `CreateVm` 返回 0、启动后两张光盘都出现在 `stratovirt` 命令行里、
+> `vmlog` 里 `Permission denied` 计数为 0。
+> 另外两种写法各有原因：用户视图路径在服务进程的命名空间里不存在（`realpath` 失败），
+> hmdfs 真实路径则是 `ohsw_stratovirt` 域读不了（SELinux）。
 > 详见 `docs/api-notes.md` 第 10 节。
 
 ## 能力边界
