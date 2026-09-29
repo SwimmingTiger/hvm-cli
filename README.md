@@ -138,6 +138,9 @@ $ strings /data/log/hwf_service/vmlog
 只是被包在 stratoVirt 自己的日志行里、并夹着 ANSI 控制序列 —— 所以 `strings`
 通常更好读。）
 
+> 注意：`vm create` 本身就会启动一次（安装阶段），所以刚创建完的虚拟机已经在跑；
+> 这里的 `vm start` 用于**之后**的启动。挂盘规则见下一节。
+
 启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
 可以这样确认：
 
@@ -147,7 +150,7 @@ $ ./hvm-cli vms myvm
 名字                     状态     活动     磁盘镜像
 myvm                     9        是       /data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/myvm.qcow2
 
-$ pgrep -a stratovirt | grep myvm        # 首次启动时命令行里能看到两张光盘的 file=
+$ pgrep -a stratovirt | grep myvm        # create 那次启动时命令行里能看到两张光盘的 file=
 ```
 
 > 服务端可能返回 `405 (VM_IP_UNAVAILABLE)`：那只是"启动后立刻查客户机 IP 没查到"，
@@ -155,14 +158,15 @@ $ pgrep -a stratovirt | grep myvm        # 首次启动时命令行里能看到�
 
 ### 3.1 光盘怎么挂（重要）
 
-`start` 的 `--image` / `--enhance` **只在第一次启动（安装阶段）生效**：
+挂盘发生在 **`vm create`**，不在 `vm start`：
 
-| 时机 | 光盘 |
-|---|---|
-| **第一次**启动 | 安装盘（`--image`）与扩展盘（`--enhance`）**两张都会挂上** |
-| **之后**每次启动 | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` 也一样（实测：此时命令行里只有 UEFI 固件、磁盘、UEFI vars） |
+| 操作 | 光盘 | 实测 |
+|---|---|---|
+| **`vm create`** | 安装盘（`--image`）+ 扩展盘（`--enhance`）**两张都会挂上** | `create` 返回 rc=0 后立刻能查到 `stratovirt` 进程（状态 9、`vm-info` 给出 PID），其命令行里 `media=cdrom` 计数为 **2** |
+| **之后的任何 `vm start`** | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` | 对该虚拟机执行 `start --image … --enhance …`，命令行里只有 UEFI 固件、磁盘、UEFI vars，`media=cdrom` 计数为 **0** |
 
-装完之后要挂盘，用**热插拔**接口：
+也就是说：**`CreateVm` 会顺带完成一次启动**（安装阶段就是这一次），安装介质也只在这一次挂上；
+以后再启动要挂盘，用**热插拔**接口：
 
 ```console
 $ ./hvm-cli vm mount-cd --name myvm \
@@ -175,8 +179,10 @@ $ ./hvm-cli vm mount-cd --name myvm \
 `QMP: --> blockdev_add { node_name: "cdrom-drive1" }` 与
 `QMP: --> device_add { driver: "usb-storage" }`，也就是以 USB 存储设备热插拔进去的。）
 
-> 服务端"第一次挂、之后不挂"的内部依据（很可能是一个"已安装"标志，`DoStartVm`
-> 内部会调 `InstallVm`）**尚未反汇编确认**，这里只记录实测行为。
+> 两点说明：
+> 1. 因此 `vm create` 之后**通常不需要再 `vm start`** —— 它已经在跑（安装阶段）；
+> 2. "`CreateVm` 为什么会启动"（推测与内部的 `InstallVm` / 快速启动流程有关）
+>    **尚未确认**，这里只记录实测到的行为。
 
 ### 4. 暂停 / 恢复
 
@@ -272,7 +278,7 @@ $ ./hvm-cli --vm win11 disk path
 > 框架自动生成磁盘 `.../vm_manager/<hash>/<vm>/img/vm.qcow2`（稀疏，随写增长）。
 
 > ✅ **安装介质能挂上**（实测）：ISO 路径写成上面那种**媒体库视图**即可 ——
-> `CreateVm` 返回 0、首次启动后安装盘与扩展盘两张都出现在 `stratovirt` 命令行里、
+> `CreateVm` 返回 0（它顺带完成一次启动）、那次启动里安装盘与扩展盘两张都出现在 `stratovirt` 命令行里、
 > `vmlog` 里 `Permission denied` 计数为 0。
 > 另外两种写法各有原因：用户视图路径在服务进程的命名空间里不存在（`realpath` 失败），
 > hmdfs 真实路径则是 `ohsw_stratovirt` 域读不了（SELinux）。
@@ -379,7 +385,7 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 
 - [x] `hvm-cli`：状态/能力/电源/快照/共享目录/网络/磁盘/显示/内存
 - [x] `hvm-cli`：**创建 / 启动 / 销毁虚拟机**（`CfgInfo` 手工构造，实测 `CreateVm` 返回 0）
-- [x] `hvm-cli`：安装盘与扩展盘挂载 + 运行中热插拔（`vm mount-cd` / `vm unmount-cd`）。实测：**首次启动**两张盘都会挂上，之后启动不再自动挂盘，改用 `mount-cd`；ISO 路径会自动转成媒体库视图
+- [x] `hvm-cli`：安装盘与扩展盘挂载 + 运行中热插拔（`vm mount-cd` / `vm unmount-cd`）。实测：**`vm create` 那次启动**两张盘都会挂上，之后的 `start` 不再挂盘，改用 `mount-cd`；ISO 路径会自动转成媒体库视图
 - [x] `hvm-cli`：主机 ↔ 客户机通道（`ChannelInfo` + `Send/RecvDataFromVm`）
 - [x] `hvm-cli`：LinuxFusion / RGM 运维面（`pause`/`resume`/剪贴板/图库/客户机磁盘共享/
       自动暂停之外的 23 个 kit 接口；kit 120 个方法已接 **78** 个）

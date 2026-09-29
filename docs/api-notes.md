@@ -429,8 +429,11 @@ CheckWinImgPath(175)     Windows 安装镜像判定
   ```
 
 - 换成该写法后：`IsValidPath` / `DetectIsoType` / `CheckFiles` 全部通过、`CreateVm` 返回 0、
-  首次启动后安装盘与扩展盘两张都出现在 stratovirt 命令行里、`vmlog` 里 `Permission denied` 计数为 0；
-  但**只有第一次启动**会挂这两张盘：之后即使 `start` 再传 `--image` / `--enhance`，
+  挂盘发生在 **`CreateVm` 自己那次启动**上（实测：create 返回 0 后立刻有 stratovirt 进程，
+  其命令行里安装盘与扩展盘两张都在、`media=cdrom` 计数为 2；而对已存在的虚拟机执行
+  `start --image … --enhance …` 时计数为 0，即 `start` 不挂盘）、
+  `vmlog` 里 `Permission denied` 计数为 0；
+  但**只有 `CreateVm` 那一次启动**会挂这两张盘：之后即使 `start` 再传 `--image` / `--enhance`，
   命令行里也只剩 UEFI 固件、磁盘与 UEFI vars（实测，`media=cdrom` 计数为 0）。
   装完之后要挂盘必须用热插拔接口 `MountCDDriveToVm`（`hvm-cli vm mount-cd`），
   它通过 QMP 以 `usb-storage` 设备热插拔：`blockdev_add { node_name: "cdrom-drive1" }`
