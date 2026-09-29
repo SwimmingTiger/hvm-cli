@@ -363,3 +363,63 @@ CheckWinImgPath(175)     Windows 安装镜像判定
 - 提供真实 ISO/qcow2 镜像后即可完成一次完整创建；
 - `DeviceInfo`（0x260）内部字段尚未逐个还原（各 `Unwrap*Device` 函数在 [N] 中）；
 - 事件回调（`RegisterVmStatusCallback` 等）。
+
+## 10. 安装介质为什么挂不上（沙箱三层锁，实测）
+
+给虚拟机挂安装光盘（`--image X.iso`）时，服务端会把该路径交给 `stratovirt` 打开。
+实测发现**能读这个文件的进程，和能写文件的位置，被三层隔离拆开了**：
+
+### 10.1 SELinux 域隔离（主因）
+
+```
+(typetransition ohos_vm_manager ohsw_stratovirt_exec process ohsw_stratovirt)
+```
+
+| 阶段 | 域 | 结果 |
+|---|---|---|
+| `IsValidPath` / `DetectIsoType` / `CheckFiles` | `ohos_vm_manager` | 能读 hmdfs（用户存储）✓ |
+| `stratovirt` 真正打开文件当光盘 | `ohsw_stratovirt` | hmdfs 一律 `Permission denied` ✗ |
+
+实测各种位置的组合（`/storage/Users/...`、`Download/<bundle>/`、
+应用沙箱 `/data/storage/el2/base/files/...`、`/data/local/tmp`、`/dev/shm`）：
+**没有一个位置能被两个域同时读到**。文件标签实测为 `u:object_r:hmdfs:s0`。
+
+### 10.2 挂载命名空间隔离
+
+服务进程有独立的挂载命名空间：root（`sudo`）看到的
+`/data/service/el0/virt_service/100/vm_manager` 是**空 tmpfs**，
+而服务自己的视图里有 `<hash>/<vm>/img/vm.qcow2`。
+`/proc/<vm_manager pid>/root/...` 被 SELinux 拒绝（sudo 域不能 ptrace 其它域）。
+
+### 10.3 受限的 sudo 域
+
+`sudo` 得到的是 `u:r:sudo_execv_label:s0`：读不了别的域的 `/proc/<pid>/status`、
+读不了 `dmesg`（拿不到 AVC）、连 `/data/log/hwf_service` 都进不去。
+`su hwf_service` 不存在，`chcon` 是 toybox 版不支持 `--reference`，
+且 hmdfs 上 `chmod` 报告成功但权限不变。**改标签/进命名空间这两条路都断了。**
+
+### 10.4 唯一剩下的通道
+
+`ImportVmDiskImage(vm, src, dst, sptr<MigrationOptions>)` 内部是
+`VmAssistantManager::CopyFile(...)` —— **由服务进程自己拷文件**，
+落点若在服务数据区，标签天然正确。实测调用到服务端返回：
+
+```
+[(HandleImportVmDiskImage:1086)]MigrationOptions is nullptr.
+```
+
+即需要构造私有类 `MigrationOptions`（与 `CfgInfo` 同类问题，
+两个库里都没有导出其构造函数），这是继续推进的前置条件。
+
+### 10.5 画面
+
+VM 的显示是 `-display ohui,...socks-path=/data/service/el2/100/virt_service/hwf_service/<hash>/<vm>/uds`
+（华为私有后端），消费方是 HWF UI 应用；而**固件里只有 napi 库、没有该 UI 应用**，
+设备上也没安装（`bm dump` 里只有 `app.hackeris.winehua` 与 `com.oseasy1.ohvm`）。
+客户端 kit 的 121 个方法里**没有任何截屏接口**；
+QMP socket（可 `screendump` + `input-send-event`）只有 hwf_service 域能进。
+
+> 串口：`-serial redirect-to-log` 写进 `/data/log/hwf_service/vmlog`
+> （该目录属组是 `log`，本工具进程在 `log` 组内，**可以读**）。
+> 但实测该文件里目前只有 stratoVirt 自身日志，没有客户机串口输出
+> —— 客户机没引导起来时不会有输出，能否拿到取决于固件的串口配置。

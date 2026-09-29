@@ -268,6 +268,45 @@ int Client::destroyVm(const std::string &name) {
     }
 }
 
+int Client::mountCdDrive(const std::string &name, const std::string &path, bool insert,
+                         std::string &out) {
+    using Fn = int (*)(void *, const std::string &, const std::string &, bool, std::string &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "16MountCDDriveToVm" + kStringConst + "SA_bRS8_");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, name, path, insert, out);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::unmountCdDrive(const std::string &name, const std::string &path) {
+    using Fn = int (*)(void *, const std::string &, const std::string &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "20UnmountCDDriveFromVm" + kStringConst + "SA_");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, name, path);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::importVmDiskImage(const std::string &name, const std::string &src,
+                              const std::string &dst) {
+    // 符号：...17ImportVmDiskImageERKNSt3__h...EESA_SA_RKNS_4sptrINS_16MigrationOptionsEEE
+    using Fn = int (*)(void *, const std::string &, const std::string &, const std::string &,
+                       const void *);
+    auto f = resolve<Fn>(std::string(kWrapper) + "17ImportVmDiskImage" + kStringConst +
+                         "SA_SA_RKNS_4sptrINS0_16MigrationOptionsEEE");
+    if (f == nullptr) return kErrNoSymbol;
+    void *holder = nullptr;  // 空的 sptr<MigrationOptions>
+    try {
+        return f(instance_, name, src, dst, &holder);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
 int Client::stopVm(const std::string &name, bool clean) {
     using Fn = int (*)(void *, const std::string &, bool);
     auto f = resolve<Fn>(std::string(kWrapper) + "6StopVm" + kStringConst + "b");

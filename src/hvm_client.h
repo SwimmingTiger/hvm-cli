@@ -85,6 +85,14 @@ class Client {
     int startVm(const std::string &name, void *cfgObj);
     //: 销毁虚拟机（不需要 CfgInfo）
     int destroyVm(const std::string &name);
+    //: 给虚拟机挂载/卸载光盘（安装 ISO）。成功时 out 返回挂载结果描述
+    int mountCdDrive(const std::string &name, const std::string &path, bool insert,
+                     std::string &out);
+    int unmountCdDrive(const std::string &name, const std::string &path);
+    //: 让服务端自己把 src 处文件拷到 dst（服务进程有权限读写用户区，且目标落在
+    //: 服务数据区时标签正确）—— 实测用于把 ISO 搬进 stratovirt 读得到的地方
+    int importVmDiskImage(const std::string &name, const std::string &src,
+                          const std::string &dst);
     int stopVm(const std::string &name, bool clean);
 
     // ------------------------------------------------------------ 电源

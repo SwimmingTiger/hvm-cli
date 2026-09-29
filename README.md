@@ -124,8 +124,13 @@ $ ./hvm-cli --vm win11 disk path
 /data/service/el0/virt_service/100/vm_manager/<hash>/win11/img/vm.qcow2
 ```
 
-> 本机未预置任何 VM 镜像（`/data/virt_service` 不存在），所以最后一步会停在
-> `file is not iso.` / `not image` —— 协议层已通，只差提供真实镜像。
+> **实测已能完整创建虚拟机**（`CreateVm` 返回 0）：活动 VM 变成新名字、
+> 框架自动生成磁盘 `.../vm_manager/<hash>/<vm>/img/vm.qcow2`（稀疏，随写增长）。
+
+> ⚠️ **但安装介质挂不上**：服务端把 ISO 路径交给 `stratovirt` 打开时，
+> 后者处于独立 SELinux 域 `ohsw_stratovirt`，只能读服务数据区；
+> 用户存储（hmdfs）、应用沙箱、`/data/local/tmp`、`/dev/shm` 全部 `Permission denied`。
+> 详见 `docs/api-notes.md` 第 10 节。
 
 ## 权限模型
 

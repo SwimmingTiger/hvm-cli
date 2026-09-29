@@ -116,6 +116,9 @@ void usage() {
         "  vm create --name N --image P [选项] [--apply]\n"
         "  vm start  --name N [选项] [--apply]\n"
         "  vm range                查询可用的 CPU / 内存范围（服务端校验依据）\n"
+        "  vm import --name N --src SRC --dst DST [--apply] 让服务端拷贝文件（搬 ISO）\n"
+        "  vm mount-cd   --name N --image X.iso [--apply]   挂载安装光盘\n"
+        "  vm unmount-cd --name N --image X.iso [--apply]   卸载\n"
         "  vm destroy N            销毁虚拟机\n"
         "    选项: --cpu N --mem GB --disk MB | --disk-gb GB\n"
         "          --bios PATH --enhance PATH --start-type N --partition --dynamic-mem\n"
@@ -291,8 +294,8 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         const std::string v = pos[++i];
         if (k == "--name") name = v;
         else if (k == "--image") image = v;
-        else if (k == "--bios") bios = v;
-        else if (k == "--enhance") enhance = v;
+        else if (k == "--bios" || k == "--src") bios = v;
+        else if (k == "--enhance" || k == "--dst") enhance = v;
         else if (k == "--cpu") cpu = atoi(v.c_str());
         else if (k == "--mem") mem = atoi(v.c_str());
         else if (k == "--disk") disk = atoi(v.c_str());          // MB
@@ -326,6 +329,53 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (!bios.empty()) cfg.setBiosPath(bios);
     if (!enhance.empty()) cfg.setEnhanceFilePath(enhance);
     cfg.setStartType(startType);
+
+    if (act == "import") {
+        // 让服务端把文件拷到指定位置（用于把 ISO 搬进 stratovirt 能读的服务数据区）
+        if (name.empty() || bios.empty() || enhance.empty()) {
+            fprintf(stderr,
+                    "用法: hvm-cli vm import --name <vm> --src <源路径> --dst <目标路径> [--apply]\n"
+                    "      （--src 与 --bios 同义，--dst 与 --enhance 同义）\n");
+            return 2;
+        }
+        if (!apply) {
+            printf("（预演）将调用 ImportVmDiskImage\n  虚拟机: %s\n  src : %s\n  dst : %s\n",
+                   name.c_str(), bios.c_str(), enhance.c_str());
+            printf("真正执行请加 --apply\n");
+            return 0;
+        }
+        int rc = c.importVmDiskImage(name, bios, enhance);
+        if (rc != 0)
+            return fail("vm import", rc,
+                        std::string("ImportVmDiskImage 返回: ") + ohos_vm_error_name(rc) + " (" +
+                            std::to_string(rc) + ")");
+        printf("已提交拷贝：%s -> %s\n", bios.c_str(), enhance.c_str());
+        return 0;
+    }
+
+    if (act == "mount-cd" || act == "unmount-cd") {
+        // 挂载/卸载安装光盘（ISO 路径同样要用服务端视角的真实路径）
+        if (name.empty() || image.empty()) {
+            fprintf(stderr, "%s 需要 --name <虚拟机名> 与 --image <ISO 路径>\n", act.c_str());
+            return 2;
+        }
+        std::string detail;
+        int rc = (act == "mount-cd") ? c.mountCdDrive(name, image, true, detail)
+                                     : c.unmountCdDrive(name, image);
+        if (rc != 0)
+            return fail("vm " + act, rc,
+                        std::string("返回: ") + ohos_vm_error_name(rc) + " (" +
+                            std::to_string(rc) + ")");
+        if (g_json) {
+            Json j("vm " + act);
+            j.str("name", name).str("path", image).str("detail", detail);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("已%s: %s\n", act == "mount-cd" ? "挂载" : "卸载", image.c_str());
+            if (!detail.empty()) printf("服务端返回: %s\n", detail.c_str());
+        }
+        return 0;
+    }
 
     if (act == "range") {
         uint32_t cmin = 0, cmax = 0, mmin = 0, mmax = 0;
