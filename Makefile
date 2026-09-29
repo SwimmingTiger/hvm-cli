@@ -23,7 +23,7 @@ OE_HDRS  := src/fusion_pty.h
 
 PREFIX   ?= $(HOME)/.local
 
-.PHONY: all clean check install
+.PHONY: all clean check check-repo install
 
 all: $(BIN_VM) $(BIN_OE)
 
@@ -42,6 +42,10 @@ check: all
 	@./$(BIN_VM) info
 	@echo "--- openeuler（融合开发引擎）---"
 	@./$(BIN_OE) selftest
+
+# 仓库卫生：被跟踪的文件里不允许有二进制（构建产物应被 .gitignore 忽略）
+check-repo:
+	@scripts/check-no-binary.sh
 
 install: all
 	install -d $(PREFIX)/bin
