@@ -89,7 +89,7 @@ CPU 数范围     : 6 .. 8
 
 磁盘下限为 65536 MB（= 64 GB），由服务端校验，不在上面这条输出里。
 
-### 2. 创建虚拟机（只建配置与磁盘，不开机）
+### 2. 创建虚拟机（会顺带完成一次启动）
 
 ```console
 $ ./hvm-cli vm create \
@@ -101,6 +101,10 @@ $ ./hvm-cli vm create \
 CreateVm 返回 rc=0 (OK)
 ```
 
+- **`CreateVm` 会顺带把虚拟机启动起来**（安装阶段就是这一次）：实测返回 rc=0 之后
+  立刻就有 `stratovirt` 进程、`vms` 里状态不再是 0，且**安装盘与扩展盘两张都挂在这一刻**
+  —— 所以创建之后通常**不需要**再 `vm start`（详见 [3.1](#31-光盘怎么挂重要)）。
+  用完记得停机：`./hvm-cli force-stop myvm`；
 - `--image` 是安装盘 ISO。这个路径会被**自动转换**成媒体库视图
   `/storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/debian-...iso`
   —— 它是唯一能让 `stratovirt` 真正打开光盘的形式（原因见 [api-notes 第 10 节](docs/api-notes.md)）。
