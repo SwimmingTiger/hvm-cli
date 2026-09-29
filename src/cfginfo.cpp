@@ -133,6 +133,71 @@ void CfgInfoBuilder::setStartType(int v) {
     if (obj_) *reinterpret_cast<std::int32_t *>(static_cast<char *>(obj_) + 80) = v;
 }
 
+MigrationOptionsBuilder::MigrationOptionsBuilder() {
+    NapiLib &lib = napiLib();
+    if (!lib.ok()) {
+        const char *e = dlerror();
+        error_ = std::string("加载 ") + kNapiLibName + " 失败: " + (e ? e : "未知原因");
+        return;
+    }
+    obj_ = ::operator new(abi::migration::kSize, std::nothrow);
+    if (obj_ == nullptr) {
+        error_ = "分配 MigrationOptions(0x40) 失败";
+        return;
+    }
+    std::memset(obj_, 0, abi::migration::kSize);
+
+    auto refBaseCtor = reinterpret_cast<CtorFn>(dlsym(RTLD_DEFAULT, "_ZN4OHOS7RefBaseC2Ev"));
+    auto parcelableCtor =
+        reinterpret_cast<ParcelableCtorFn>(dlsym(RTLD_DEFAULT, "_ZN4OHOS10ParcelableC2Ev"));
+    if (refBaseCtor == nullptr || parcelableCtor == nullptr) {
+        error_ = "找不到 RefBase/Parcelable 构造函数（libutils 未加载？）";
+        return;
+    }
+
+    char *p = static_cast<char *>(obj_);
+    // 逐条对应 [N] OnImportVmDiskImage 的内联构造现场（0x989E4~0x98A3C）
+    refBaseCtor(p + abi::migration::kRefBaseOffset);
+    parcelableCtor(p, lib.at(abi::migration::kVttParcelable));
+    *reinterpret_cast<void **>(p) = lib.at(abi::migration::kVtable);
+    *reinterpret_cast<void **>(p + abi::migration::kRefBaseOffset) =
+        lib.at(abi::migration::kVtableRefBase);
+}
+
+MigrationOptionsBuilder::~MigrationOptionsBuilder() {
+    // 与 CfgInfoBuilder 同理：对象可能已被 sptr 接管，不在此释放。
+    obj_ = nullptr;
+}
+
+void MigrationOptionsBuilder::setKeepSnapshots(bool v) {
+    if (obj_) *reinterpret_cast<bool *>(static_cast<char *>(obj_) + abi::migration::kIsKeepSnapshots) = v;
+}
+
+void MigrationOptionsBuilder::setPassword(const std::string &v) {
+    if (obj_) new (static_cast<char *>(obj_) + abi::migration::kPassword) std::string(v);
+}
+
+void MigrationOptionsBuilder::setForceImport(bool v) {
+    if (obj_) *reinterpret_cast<bool *>(static_cast<char *>(obj_) + abi::migration::kIsForceImport) = v;
+}
+
+std::string MigrationOptionsBuilder::dump() const {
+    if (!obj_) return error_.empty() ? "(未构造)" : error_;
+    const char *p = static_cast<const char *>(obj_);
+    char buf[320];
+    snprintf(buf, sizeof buf,
+             "MigrationOptions@%p vptr=%p\n"
+             "  isKeepSnapshots(+10) = %d\n"
+             "  hasCallback(+11)     = %d\n"
+             "  password(+16)        = \"%s\"\n"
+             "  isForceImport(+40)   = %d",
+             obj_, *reinterpret_cast<void *const *>(p), static_cast<int>(p[10]),
+             static_cast<int>(p[11]),
+             (*reinterpret_cast<const std::string *>(p + abi::migration::kPassword)).c_str(),
+             static_cast<int>(p[40]));
+    return buf;
+}
+
 std::string CfgInfoBuilder::dump() const {
     if (!obj_) return error_.empty() ? "(未构造)" : error_;
     const char *p = static_cast<const char *>(obj_);

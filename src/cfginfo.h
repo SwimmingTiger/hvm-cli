@@ -43,6 +43,30 @@ class CfgInfoBuilder {
     std::string error_;
 };
 
+//: 手工构造 MigrationOptions —— ImportVmDiskImage / ExportVmDiskImage 的第 4 个参数。
+//: 服务端要求它非空（HandleImportVmDiskImage:1086），配方见 vmmanager 的 ABI 头文件。
+class MigrationOptionsBuilder {
+  public:
+    MigrationOptionsBuilder();
+    ~MigrationOptionsBuilder();
+    MigrationOptionsBuilder(const MigrationOptionsBuilder &) = delete;
+    MigrationOptionsBuilder &operator=(const MigrationOptionsBuilder &) = delete;
+
+    bool ok() const { return obj_ != nullptr; }
+    const std::string &lastError() const { return error_; }
+
+    void setKeepSnapshots(bool v);            // +10
+    void setPassword(const std::string &v);   // +16（std::string）
+    void setForceImport(bool v);              // +40
+
+    std::string dump() const;
+    void *raw() const { return obj_; }
+
+  private:
+    void *obj_ = nullptr;
+    std::string error_;
+};
+
 }  // namespace hvm
 
 #endif  // HVM_CFGINFO_H

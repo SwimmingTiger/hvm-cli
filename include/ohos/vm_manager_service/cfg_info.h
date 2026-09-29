@@ -140,7 +140,46 @@ constexpr std::uintptr_t kFnDeviceInfoAssign = 0x663B4;
  *       但它们指向 .bss 中的槽位（不是代码），照地址调用会段错误。
  */
 
+/* ======================================================================
+ * MigrationOptions —— 同一个 napi 模块里的另一个参数对象
+ *
+ * 用途：ImportVmDiskImage / ExportVmDiskImage 的第 4 个参数
+ *       （const sptr<MigrationOptions> &）。服务端要求它非空
+ *       （HandleImportVmDiskImage:1086 "MigrationOptions is nullptr."）。
+ *
+ * 构造序列取自 [N] 中 WindowsFusionNapi::OnImportVmDiskImage 的内联现场
+ * （0x989E4~0x98A3C 的反汇编）：
+ *
+ *   p = operator new(0x40);  memset(p, 0, 0x40)
+ *   RefBase::RefBase(p + 48)                       ; 内嵌 RefBase
+ *   Parcelable::Parcelable(p, baseN + 0xB0698)     ; 注意第 2 参数是 VTT
+ *   *(void**)(p + 0)  = baseN + 0xB4790            ; 主 vtable 地址点
+ *   *(void**)(p + 48) = baseN + 0xB47F0            ; = 主 vtable + 96
+ *   RefBase::IncStrongRef(p + 48, &holder)
+ *
+ * 字段（取自 [N] 的 UnwrapMigrationOptions）：
+ *   +10  bool         isKeepSnapshots
+ *   +11  bool         hasCallback
+ *   +16  std::string  password（24 字节，+16..+39）
+ *   +40  bool         isForceImport
+ * ====================================================================== */
+
 }  // namespace napi
+
+namespace migration {
+
+constexpr std::size_t kSize = 0x40;
+constexpr std::uintptr_t kVtable = 0xB4790;          // 主 vtable 地址点
+constexpr std::uintptr_t kVtableRefBase = 0xB47F0;   // = kVtable + 96
+constexpr std::uintptr_t kVttParcelable = 0xB0698;   // Parcelable(this, vtt) 的 vtt
+constexpr std::size_t kRefBaseOffset = 48;
+
+constexpr std::size_t kIsKeepSnapshots = 10;  // bool
+constexpr std::size_t kHasCallback = 11;      // bool
+constexpr std::size_t kPassword = 16;         // std::string
+constexpr std::size_t kIsForceImport = 40;    // bool
+
+}  // namespace migration
 
 /* ------------------------------------------------------------ 序列化 */
 

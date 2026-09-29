@@ -91,8 +91,9 @@ class Client {
     int unmountCdDrive(const std::string &name, const std::string &path);
     //: 让服务端自己把 src 处文件拷到 dst（服务进程有权限读写用户区，且目标落在
     //: 服务数据区时标签正确）—— 实测用于把 ISO 搬进 stratovirt 读得到的地方
+    //: opts 为 MigrationOptionsBuilder 构造出的对象指针（服务端要求非空）
     int importVmDiskImage(const std::string &name, const std::string &src,
-                          const std::string &dst);
+                          const std::string &dst, void *opts);
     int stopVm(const std::string &name, bool clean);
 
     // ------------------------------------------------------------ 电源

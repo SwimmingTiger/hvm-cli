@@ -283,10 +283,14 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     std::string name, image, bios, enhance;
     int cpu = 0, mem = 0, disk = 0, startType = -1;
     bool partition = false, dynMem = false, apply = false;
+    bool keepSnapshots = false, forceImport = false;
+    std::string password;
 
     for (std::size_t i = 1; i < pos.size(); ++i) {
         const std::string &k = pos[i];
         if (k == "--apply") { apply = true; continue; }
+        if (k == "--keep-snapshots") { keepSnapshots = true; continue; }
+        if (k == "--force-import") { forceImport = true; continue; }
         if (k == "--partition") { partition = true; continue; }
         if (k == "--dynamic-mem") { dynMem = true; continue; }
         if (k.size() != 0 && k[0] != '-') { name = k; continue; }
@@ -301,6 +305,7 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         else if (k == "--disk") disk = atoi(v.c_str());          // MB
         else if (k == "--disk-gb") disk = atoi(v.c_str()) * 1024; // 便捷：按 GB 输入
         else if (k == "--start-type") startType = atoi(v.c_str());
+        else if (k == "--password") password = v;
         else { fprintf(stderr, "未知选项: %s\n", k.c_str()); return 2; }
     }
 
@@ -338,13 +343,20 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
                     "      （--src 与 --bios 同义，--dst 与 --enhance 同义）\n");
             return 2;
         }
+        // MigrationOptions：服务端要求非空，字段布局见 include/.../cfg_info.h
+        hvm::MigrationOptionsBuilder opts;
+        if (!opts.ok()) return fail("vm import", -1, "构造 MigrationOptions 失败: " + opts.lastError());
+        opts.setKeepSnapshots(keepSnapshots);
+        opts.setForceImport(forceImport);
+        if (!password.empty()) opts.setPassword(password);
         if (!apply) {
             printf("（预演）将调用 ImportVmDiskImage\n  虚拟机: %s\n  src : %s\n  dst : %s\n",
                    name.c_str(), bios.c_str(), enhance.c_str());
-            printf("真正执行请加 --apply\n");
+            fputs(opts.dump().c_str(), stdout);
+            printf("\n真正执行请加 --apply\n");
             return 0;
         }
-        int rc = c.importVmDiskImage(name, bios, enhance);
+        int rc = c.importVmDiskImage(name, bios, enhance, opts.raw());
         if (rc != 0)
             return fail("vm import", rc,
                         std::string("ImportVmDiskImage 返回: ") + ohos_vm_error_name(rc) + " (" +

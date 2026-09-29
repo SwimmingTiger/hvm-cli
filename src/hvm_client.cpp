@@ -290,13 +290,15 @@ int Client::unmountCdDrive(const std::string &name, const std::string &path) {
 }
 
 int Client::importVmDiskImage(const std::string &name, const std::string &src,
-                              const std::string &dst) {
+                              const std::string &dst, void *opts) {
     // 符号：...17ImportVmDiskImageERKNSt3__h...EESA_SA_RKNS_4sptrINS_16MigrationOptionsEEE
     using Fn = int (*)(void *, const std::string &, const std::string &, const std::string &,
                        const void *);
     auto f = resolve<Fn>("ImportVmDiskImage");
     if (f == nullptr) return kErrNoSymbol;
-    void *holder = nullptr;  // 空的 sptr<MigrationOptions>
+    // 第 5 个参数是 const sptr<MigrationOptions>&；sptr 的内存布局就是一个指针，
+    // 因此传入「指向该指针的指针」即 ABI 等价（与 CreateVm/StartVm 的 sptr 同理）。
+    void *holder = opts;
     try {
         return f(instance_, name, src, dst, &holder);
     } catch (...) {
