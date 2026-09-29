@@ -145,6 +145,28 @@ int Client::isFeatureSupported(int featureId, bool &out) {
     }
 }
 
+int Client::availableCpuRange(uint32_t &minVal, uint32_t &maxVal) {
+    using Fn = int (*)(void *, unsigned int &, unsigned int &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "25GetVmAvailableCpuNumRangeERjS2_");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, minVal, maxVal);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::availableMemoryRange(uint32_t &minVal, uint32_t &maxVal) {
+    using Fn = int (*)(void *, unsigned int &, unsigned int &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "29GetVmAvailableMemorySizeRangeERjS2_");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, minVal, maxVal);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
 int Client::openEulerVersion(std::string &out) {
     using Fn = int (*)(void *, std::string &);
     auto f = resolve<Fn>(std::string(kWrapper) + "19GetOpenEulerVersion" + kStringRef);

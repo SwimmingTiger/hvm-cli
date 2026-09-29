@@ -237,3 +237,54 @@ void onStatus(void *session, int sessionId, int status);        // 1=就绪 2=�
 （早期版本在本地实现了残缺的行规程，导致整行重复下发、`uname -r` 被粘连成
 `uname -runame -r` 之类的现象。）
 
+
+## 8. CfgInfo 手工构造（实测记录）
+
+`vm create` 已打通到服务端业务校验，过程与踩坑记录如下。
+
+### 构造序列
+
+`CfgInfo` 没有独立构造函数（被内联展开），需按反汇编逐条复刻，完整配方见
+`include/ohos/vm_manager_service/cfg_info.h`。对象大小 `0x300`，关键成员：
+`DeviceInfo`（+88，0x260）、`BundleInfo`（+696，内含 RefBase@+736）、
+`CfgInfo` 自身的 RefBase（+752）。
+
+### 两个真实踩坑
+
+1. **`Parcelable` 有虚基类**，其构造函数签名是 `Parcelable(this, vtt)`。
+   只传 `this` 会因 x1 为垃圾值而崩溃。需要的 VTT：
+   CfgInfo → `0xB0498`，BundleInfo → `0xB0658`（均在 [N] 库中）。
+2. **[N] 的 `.gnu_debugdata` 里有 "RefBase::RefBase" 之类符号，但它们指向
+   `.bss` 槽位而不是代码**，按该地址调用必段错误。真实的 `RefBase`/`Parcelable`
+   构造要 `dlsym(RTLD_DEFAULT, "_ZN4OHOS7RefBaseC2Ev" / "_ZN4OHOS10ParcelableC2Ev")`
+   （由 libutils 提供）。
+
+### 服务端校验链（实测日志）
+
+```
+hvm-cli    [CreateVm:213]        [virtio-mem] write cfgInfo      ← 客户端 marshal 成功
+vm_manager [HandleCreateVm:300]  [virtio-mem] Read cfgInfo       ← 服务端 unmarshal 成功
+vm_manager [IsValidPath:81]      Standardized path fail!         ← bios/image 路径
+vm_manager [CheckParams:110/124] invalid memory size / disk size ← 单位：内存 GB、磁盘 MB
+vm_manager [CheckFiles:159]      no such file.                   ← access(path, R_OK)
+vm_manager [DetectIsoType:148]   file is not iso.                ← 镜像类型
+vm_manager [CheckWinImgPath:175] not image
+```
+
+### 调试器不可用（记录备查）
+
+本机 `lldb` / `lldb-server` 在两种身份下都用不了：
+
+| 身份 | 结果 |
+|---|---|
+| app uid（HiShell 沙箱） | `ptrace failed: Permission denied` |
+| `hdc shell`（uid 2000） | 不同挂载命名空间：看不到 `/storage/Users`、`/data/service/hnp`；二进制推进 `/data/local/tmp` 后 exec 被拒；无 `su` |
+
+因此定位这类问题要走**静态分析**（本次正是靠反汇编 0xA848C 处的内联构造现场
+发现了 VTT 参数）。
+
+### 仍未完成
+
+- 提供真实 ISO/qcow2 镜像后即可完成一次完整创建；
+- `DeviceInfo`（0x260）内部字段尚未逐个还原（各 `Unwrap*Device` 函数在 [N] 中）；
+- 事件回调（`RegisterVmStatusCallback` 等）。

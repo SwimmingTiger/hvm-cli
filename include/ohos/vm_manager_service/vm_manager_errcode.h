@@ -24,7 +24,10 @@
 /** 201：无虚拟机时调用 GetOpenEulerVersion。 */
 #define OHOS_VM_ERR_NO_VIRTUAL_MACHINE 201
 
-/** 401：服务端拒绝虚拟机名 —— 长度非法或名字里含 ".."（HandleStartVm 校验）。 */
+/**
+ * 401：服务端拒绝虚拟机名（HandleStartVm/HandleCreateVm 校验长度与 ".."）。
+ * 注意：实测中该码也会在其他校验失败时被回写，不宜单独作为"名字问题"的判据。
+ */
 #define OHOS_VM_ERR_INVALID_VM_NAME 401
 
 /** 404：CfgInfo 为空，或从 Parcel 反序列化失败（HandleStartVm/HandleCreateVm）。 */

@@ -108,8 +108,11 @@ void usage() {
         "  vm ctor   [选项]        仅构造 CfgInfo 并打印（验证用，不调服务）\n"
         "  vm create --name N --image P [选项] [--apply]\n"
         "  vm start  --name N [选项] [--apply]\n"
+        "  vm range                查询可用的 CPU / 内存范围（服务端校验依据）\n"
         "  vm destroy N            销毁虚拟机\n"
-        "    选项: --cpu N --mem MB --disk GB --bios PATH --enhance PATH\n"
+        "    选项: --cpu N --mem GB --disk MB | --disk-gb GB\n"
+        "          --bios PATH --enhance PATH --start-type N --partition --dynamic-mem\n"
+        "    单位（实测）：memorySize 为 GB（范围见 vm range），diskSize 为 MB 且 >= 65536\n"
         "          --start-type N --partition --dynamic-mem\n"
         "    注意: 不带 --apply 时为预演，不产生副作用\n"
         "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
@@ -285,9 +288,25 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         else if (k == "--enhance") enhance = v;
         else if (k == "--cpu") cpu = atoi(v.c_str());
         else if (k == "--mem") mem = atoi(v.c_str());
-        else if (k == "--disk") disk = atoi(v.c_str());
+        else if (k == "--disk") disk = atoi(v.c_str());          // MB
+        else if (k == "--disk-gb") disk = atoi(v.c_str()) * 1024; // 便捷：按 GB 输入
         else if (k == "--start-type") startType = atoi(v.c_str());
         else { fprintf(stderr, "未知选项: %s\n", k.c_str()); return 2; }
+    }
+
+    // 服务端会按可用范围校验；先查出来，给用户明确提示
+    uint32_t cmin = 0, cmax = 0, mmin = 0, mmax = 0;
+    const bool haveCpuRange = c.availableCpuRange(cmin, cmax) == 0;
+    const bool haveMemRange = c.availableMemoryRange(mmin, mmax) == 0;
+    if (act == "create" || act == "start") {
+        if (haveCpuRange && cpu != 0 && (static_cast<uint32_t>(cpu) < cmin || static_cast<uint32_t>(cpu) > cmax)) {
+            fprintf(stderr, "CPU 数 %d 超出可用范围 %u..%u\n", cpu, cmin, cmax);
+            return 2;
+        }
+        if (haveMemRange && mem != 0 && (static_cast<uint32_t>(mem) < mmin || static_cast<uint32_t>(mem) > mmax)) {
+            fprintf(stderr, "内存 %d GB 超出可用范围 %u..%u GB\n", mem, mmin, mmax);
+            return 2;
+        }
     }
 
     hvm::CfgInfoBuilder cfg;
@@ -300,6 +319,24 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (!bios.empty()) cfg.setBiosPath(bios);
     if (!enhance.empty()) cfg.setEnhanceFilePath(enhance);
     cfg.setStartType(startType);
+
+    if (act == "range") {
+        uint32_t cmin = 0, cmax = 0, mmin = 0, mmax = 0;
+        int rcCpu = c.availableCpuRange(cmin, cmax);
+        int rcMem = c.availableMemoryRange(mmin, mmax);
+        if (g_json) {
+            Json j("vm range");
+            j.num("cpuMin", cmin).num("cpuMax", cmax).num("rcCpu", rcCpu)
+             .num("memMin", mmin).num("memMax", mmax).num("rcMem", rcMem);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printRow("CPU 数范围", std::to_string(cmin) + " .. " + std::to_string(cmax) +
+                                     (rcCpu ? "  (rc=" + std::to_string(rcCpu) + ")" : ""));
+            printRow("内存范围", std::to_string(mmin) + " .. " + std::to_string(mmax) +
+                                    (rcMem ? "  (rc=" + std::to_string(rcMem) + ")" : ""));
+        }
+        return 0;
+    }
 
     if (act == "ctor") {
         // 只验证构造配方，不碰服务端
@@ -334,6 +371,8 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         if (!apply) {
             printf("（预演）将调用 %s\n", act == "create" ? "CreateVm" : "StartVm");
             printf("  虚拟机名   : %s\n", name.c_str());
+            if (haveCpuRange) printf("  可用 CPU   : %u..%u\n", cmin, cmax);
+            if (haveMemRange) printf("  可用内存   : %u..%u GB\n", mmin, mmax);
             if (act == "create") printf("  镜像路径   : %s\n", image.c_str());
             fputs(cfg.dump().c_str(), stdout);
             printf("\n以上为将要发送的内容；真正执行请加 --apply\n");

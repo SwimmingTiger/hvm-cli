@@ -66,6 +66,10 @@ class Client {
     //: 返回原始码：1 表示存在，0 表示不存在
     int isProcessExist(const std::string &name);
     int isFeatureSupported(int featureId, bool &out);
+    //: 虚拟机可用 CPU 数范围 (min, max)
+    int availableCpuRange(uint32_t &minVal, uint32_t &maxVal);
+    //: 虚拟机可用内存范围 (min, max)，单位同 memorySize 字段
+    int availableMemoryRange(uint32_t &minVal, uint32_t &maxVal);
     int openEulerVersion(std::string &out);
     int hashName(std::string &out);
     int isQuickStartScenario();

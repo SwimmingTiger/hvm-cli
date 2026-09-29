@@ -63,6 +63,40 @@ $ ./openeuler image install    # 安装/更新 openEuler 镜像
 补全、Ctrl-C/Ctrl-D 全部由远端 bash/readline 处理；CLI 只额外把本地窗口尺寸变化
 同步给远端（SIGWINCH → `SetWinSize`）。
 
+## hvm-cli：创建 / 启动 / 销毁虚拟机
+
+`CreateVm` / `StartVm` 需要一个 `CfgInfo` 对象，而它是华为私有类型（无头文件、库被
+strip）。本仓库按逆向出的**内联构造序列**手工构造它（见 `src/cfginfo.cpp` 与
+`include/ohos/vm_manager_service/cfg_info.h`），并已实测打通：
+
+```console
+$ ./hvm-cli vm range                     # 先查可用范围（服务端校验依据）
+CPU 数范围     : 6 .. 8
+内存范围       : 6 .. 18
+
+$ ./hvm-cli vm ctor --cpu 6 --mem 8 --disk-gb 128     # 只构造，不调服务
+CfgInfo@0x... base=0x... vptr=0x...(base+0xB2F90)
+  cpuNum(+12) = 6 ... startType(+80) = -1
+
+$ ./hvm-cli vm create --name myvm --image /path/to/win.iso \
+      --bios /path/to/uefi.fd --cpu 6 --mem 8 --disk-gb 128 --apply
+```
+
+不带 `--apply` 时是**预演**（打印将发送的内容，不产生副作用）。
+
+### 参数规则（逆向自服务端校验，实测确认）
+
+| 参数 | 单位 | 约束 |
+|---|---|---|
+| `--cpu` | 个数 | 必须在 `GetVmAvailableCpuNumRange` 返回的区间内（本机 6..8） |
+| `--mem` | **GB** | 必须在 `GetVmAvailableMemorySizeRange` 区间内（本机 6..18） |
+| `--disk` / `--disk-gb` | MB / GB | 服务端要求 `>= 0x10000`（64 GB）且不超过宿主磁盘 |
+| `--bios` | 路径 | 必须存在且可读（服务端 `access(R_OK)`）；如 `/system/opt/virt_service/virtualized_hwf/stratovirt-vars` |
+| `--image` | 路径 | 必须存在且可读，且**是 ISO 或 qcow2 镜像**（`DetectIsoType`/`GetQcowState`） |
+
+> 本机未预置任何 VM 镜像（`/data/virt_service` 不存在），所以最后一步会停在
+> `file is not iso.` / `not image` —— 协议层已通，只差提供真实镜像。
+
 ## 权限模型
 
 `vm_manager` 对每个请求做调用者校验（`VmmCommonUtils::CheckCallerIdentity`），
