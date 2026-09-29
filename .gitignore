@@ -1,5 +1,6 @@
-# 构建产物
+# 构建产物（两个命令的可执行文件）
 hvm-cli
+openeuler
 *.o
 *.so
 build/

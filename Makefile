@@ -3,35 +3,51 @@
 # 目标平台：aarch64 HarmonyOS PC（OHOS musl 用户态）
 # 工具链：系统自带 clang++（OHOS 工具链，Target: aarch64-unknown-linux-ohos）
 #
-# 运行期用 dlopen 加载系统自带的 /system/lib64/libvm_manager_kits.z.so，
-# 编译期只依赖 libdl，不需要任何 OHOS 私有头文件。
+# 本仓库构建两个命令：
+#   hvm-cli    控制我们自己创建的虚拟机（vm_manager / SA 65621）
+#   openeuler  连入融合开发引擎的 openEuler 环境（fusion PTY 通道）
+#
+# 两者都通过 dlopen 使用系统自带库，编译期只依赖 libdl。
 
 CXX      ?= clang++
 CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra
 LDLIBS   ?= -ldl
 
-BIN      := hvm-cli
-SRCS     := src/hvm_client.cpp src/fusion_pty.cpp src/main.cpp
-HDRS     := src/hvm_client.h src/fusion_pty.h
+BIN_VM   := hvm-cli
+BIN_OE   := openeuler
+
+VM_SRCS  := src/hvm_client.cpp src/main.cpp
+VM_HDRS  := src/hvm_client.h
+OE_SRCS  := src/fusion_pty.cpp src/openeuler_main.cpp
+OE_HDRS  := src/fusion_pty.h
+
 PREFIX   ?= $(HOME)/.local
 
 .PHONY: all clean check install
 
-all: $(BIN)
+all: $(BIN_VM) $(BIN_OE)
 
-$(BIN): $(SRCS) $(HDRS)
-	$(CXX) $(CXXFLAGS) -Isrc -o $@ $(SRCS) $(LDLIBS)
+$(BIN_VM): $(VM_SRCS) $(VM_HDRS)
+	$(CXX) $(CXXFLAGS) -Isrc -o $@ $(VM_SRCS) $(LDLIBS)
 	@echo "构建完成: $@"
 
-# 自检：加载客户端 kit 并读取只读状态
-check: $(BIN)
-	@./$(BIN) selftest
-	@./$(BIN) info
+$(BIN_OE): $(OE_SRCS) $(OE_HDRS)
+	$(CXX) $(CXXFLAGS) -Isrc -o $@ $(OE_SRCS) $(LDLIBS)
+	@echo "构建完成: $@"
 
-install: $(BIN)
+# 自检：分别验证两条通路的只读接口
+check: all
+	@echo "--- hvm-cli（虚拟机管理）---"
+	@./$(BIN_VM) selftest
+	@./$(BIN_VM) info
+	@echo "--- openeuler（融合开发引擎）---"
+	@./$(BIN_OE) selftest
+
+install: all
 	install -d $(PREFIX)/bin
-	install -m 0755 $(BIN) $(PREFIX)/bin/$(BIN)
-	@echo "已安装到 $(PREFIX)/bin/$(BIN)"
+	install -m 0755 $(BIN_VM) $(PREFIX)/bin/$(BIN_VM)
+	install -m 0755 $(BIN_OE) $(PREFIX)/bin/$(BIN_OE)
+	@echo "已安装到 $(PREFIX)/bin/"
 
 clean:
-	rm -f $(BIN)
+	rm -f $(BIN_VM) $(BIN_OE)

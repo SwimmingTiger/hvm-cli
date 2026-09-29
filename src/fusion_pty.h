@@ -64,6 +64,13 @@ class PtySession {
     //: 发送一段数据（自动补 '\0'）
     int send(const std::string &data);
     int setWinSize(const PtyWinSize &ws);
+    //: 下列三个作用于 manager（不依赖具体会话）
+    //: 安装/更新 openEuler 镜像
+    int installImage();
+    //: 开启"共享目录"（宿主与 openEuler 互通）
+    int enableShareFolder();
+    //: 查询共享目录开关状态
+    int sharedFolderToggleState(bool &enabled);
     int sessionId() const { return sessionId_; }
     void close();
 

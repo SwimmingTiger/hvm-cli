@@ -142,8 +142,12 @@ std::string PtySession::selfTest() {
              "OhPtyManagerOpenPtySession")
              ? "open=ok;"
              : "open=missing;";
-    s += sym<int (*)(void *, const char *)>("OhPtySessionSendData") ? "send=ok"
-                                                                   : "send=missing";
+    s += sym<int (*)(void *, const char *)>("OhPtySessionSendData") ? "send=ok;"
+                                                                   : "send=missing;";
+    s += sym<int (*)(void *)>("OhPtyManagerInstallImage") ? "image=ok;"
+                                                          : "image=missing;";
+    s += sym<int (*)(void *)>("OhPtyManagerEnableShareFolder") ? "share=ok"
+                                                               : "share=missing";
     return s;
 }
 
@@ -211,6 +215,27 @@ int PtySession::setWinSize(const PtyWinSize &ws) {
     if (fn == nullptr) return -2;
     RawWinSize raw{ws.rows, ws.cols, ws.xpixel, ws.ypixel};
     return fn(session_, &raw);
+}
+
+int PtySession::installImage() {
+    if (manager_ == nullptr) return -1;
+    auto fn = sym<int (*)(void *)>("OhPtyManagerInstallImage");
+    if (fn == nullptr) return -2;
+    return fn(manager_);
+}
+
+int PtySession::enableShareFolder() {
+    if (manager_ == nullptr) return -1;
+    auto fn = sym<int (*)(void *)>("OhPtyManagerEnableShareFolder");
+    if (fn == nullptr) return -2;
+    return fn(manager_);
+}
+
+int PtySession::sharedFolderToggleState(bool &enabled) {
+    if (manager_ == nullptr) return -1;
+    auto fn = sym<int (*)(void *, bool *)>("OhPtyManagerGetSharedFolderToggleState");
+    if (fn == nullptr) return -2;
+    return fn(manager_, &enabled);
 }
 
 void PtySession::close() {

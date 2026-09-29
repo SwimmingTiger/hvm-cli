@@ -159,9 +159,18 @@ EOF
 ./hvm-cli selftest && ./hvm-cli info
 ```
 
-## 7. fusion PTY 通道
+## 7. fusion PTY 通道（`openeuler` 命令）
 
-HiShell 的"连接 openEuler 执行命令"用的不是 vm_manager，而是 **LinuxFusion PTY**：
+HiShell 的"openEuler 标签页 / 连接 openEuler 执行命令"用的不是 vm_manager，而是
+**LinuxFusion PTY**（融合开发引擎，内部代号 **RGM**）：
+
+- 引擎内部命名：SA 65601 `rgm_manager`、SA 65604 `rgm_engine_plugin`、
+  镜像 `rgm_linux` / `rgm_hmos` / `rgm_openEuler`、开发包
+  `com.huawei.developer.rgm.images_openeuler22.03`
+- 代码层命名：`OHOS::ContainerEnginePlugin`，源码路径
+  `vendor/huawei/virt_service/container_manager/...`
+- 运行时：OzoneC 容器（overlay 路径含 `OzoneC/overlay2/rgm_openEuler/lower`）
+
 
 - HAP 侧 napi 模块：`@ohos:fusion_pty_napi`（`libs` 里还有 `@ohos:linux_developer_napi`）
 - **NDK 入口**：`/system/lib64/ndk/libfusion_pty_ndk.so`

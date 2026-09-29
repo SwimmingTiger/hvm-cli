@@ -4,16 +4,11 @@
 // 不需要 Python、不需要 root、不需要 HAP。
 #include <cstdint>
 #include <cstdio>
-#include <poll.h>
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <unistd.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
-#include "fusion_pty.h"
 #include "hvm_client.h"
 
 namespace {
@@ -105,9 +100,6 @@ void usage() {
         "状态:\n"
         "  selftest                客户端 kit 加载自检\n"
         "  info                    汇总状态（能力/活动 VM/版本/共享目录）\n"
-        "  exec <命令...>          在 openEuler 虚拟机里执行命令并打印输出\n"
-        "  shell                   连入 openEuler 虚拟机交互式 shell（Ctrl-D 退出）\n"
-        "  pty-selftest            fusion PTY 通道自检\n"
         "  vms [名字...]           列出/探测虚拟机（无枚举接口，按名字探测）\n"
         "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
         "  stratovirt-mem          stratoVirt 占用内存\n"
@@ -173,50 +165,6 @@ Args parse(int argc, char **argv, int from) {
         }
     }
     return a;
-}
-
-//: 本地终端窗口尺寸（拿不到时退回 24x80）
-hvm::PtyWinSize localWinSize() {
-    hvm::PtyWinSize ws;
-    struct winsize w {};
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_row != 0) {
-        ws.rows = w.ws_row;
-        ws.cols = w.ws_col;
-        ws.xpixel = w.ws_xpixel;
-        ws.ypixel = w.ws_ypixel;
-    }
-    return ws;
-}
-
-volatile sig_atomic_t g_winch = 0;
-extern "C" void hvmOnWinch(int) { g_winch = 1; }
-
-//: 去掉 ANSI 转义序列，便于脚本消费
-std::string stripAnsi(const std::string &in) {
-    std::string out;
-    for (size_t i = 0; i < in.size();) {
-        unsigned char c = static_cast<unsigned char>(in[i]);
-        if (c == 0x1B) {  // ESC
-            if (i + 1 < in.size() && in[i + 1] == '[') {
-                i += 2;
-                while (i < in.size() && !((in[i] >= '@' && in[i] <= '~'))) ++i;
-                if (i < in.size()) ++i;
-                continue;
-            }
-            if (i + 1 < in.size() && in[i + 1] == ']') {  // OSC ... BEL/ST
-                i += 2;
-                while (i < in.size() && in[i] != 0x07 && in[i] != 0x1B) ++i;
-                if (i < in.size() && in[i] == 0x1B) ++i;
-                if (i < in.size()) ++i;
-                continue;
-            }
-            ++i;
-            continue;
-        }
-        out += static_cast<char>(c);
-        ++i;
-    }
-    return out;
 }
 
 //: 计算字符串的终端显示宽度（CJK 记 2 列）
@@ -424,188 +372,6 @@ int run(int argc, char **argv) {
         } else {
             printf("%s\n", sn.c_str());
         }
-        return 0;
-    }
-
-    // ------------------------------------------------------------ fusion PTY
-    if (cmd == "pty-selftest") {
-        std::string st = hvm::PtySession::selfTest();
-        if (g_json) {
-            Json j(cmd);
-            j.str("pty", st);
-            printf("%s\n", j.ok().c_str());
-        } else {
-            printf("%s\n", st.c_str());
-        }
-        return 0;
-    }
-    if (cmd == "exec" || cmd == "vm-exec") {
-        if (a.pos.empty()) {
-            fprintf(stderr, "用法: hvm-cli exec <命令...>\n");
-            return 2;
-        }
-        std::string command;
-        for (size_t i = 0; i < a.pos.size(); ++i) {
-            if (i) command += " ";
-            command += a.pos[i];
-        }
-        hvm::PtyConfig pcfg;
-        pcfg.winSize = {40, 120, 0, 0};
-        hvm::PtySession pty;
-        std::string out;
-        int rc = pty.open(pcfg, [&out](const char *d) { out += d; });
-        if (rc != 0) return fail(cmd, rc, "打开 PTY 会话失败: " + pty.lastError());
-
-        // 等 shell 提示符出现（新会话会先打欢迎信息）
-        hvm::waitForOutput("$ ", 20000) || hvm::waitForOutput("# ", 1000);
-
-        // 标记在 shell 侧拼出来，避免"命令回显"里出现与输出相同的字面量，
-        // 否则等待结束标记会立刻命中回显、误判命令已结束。
-        const std::string m = "__HVM_END";
-        const std::string startMarker = m + "_START";
-        const std::string endMarker = m + "__";
-        std::string line = "M=" + m + "; echo ${M}_START; " + command +
-                           "; echo ${M}__$?\n";
-        int src = pty.send(line);
-        if (src != 0) {
-            pty.close();
-            return fail(cmd, src, "发送命令失败");
-        }
-        bool finished = hvm::waitForOutput(endMarker.c_str(), 60000);
-        if (!finished && !hvm::sessionClosed()) {
-            pty.close();
-            return fail(cmd, -1, "等待命令结束超时");
-        }
-        if (!finished && hvm::sessionClosed()) {
-            // shell 被命令本身结束（如 exit N）。库不转发退出码，只能报告"已结束"。
-            pty.close();
-            if (g_json) {
-                Json j(cmd);
-                j.str("command", command).str("stdout", "").num("exitCode", -1);
-                printf("%s\n", j.ok().c_str());
-                return 0;
-            }
-            fprintf(stderr, "会话已被命令结束（收不到结束标记，退出码不可得）\n");
-            return 1;
-        }
-        std::string plain = stripAnsi(out);
-        size_t spos = plain.find(startMarker);
-        size_t epos = plain.find(endMarker, spos == std::string::npos ? 0 : spos);
-        std::string body;
-        if (spos != std::string::npos && epos != std::string::npos) {
-            body = plain.substr(spos + startMarker.size(), epos - spos - startMarker.size());
-        } else {
-            body = plain;
-        }
-        // 去掉标记行前后的 CR/LF 与提示符残留
-        while (!body.empty() && (body.front() == '\r' || body.front() == '\n')) body.erase(0, 1);
-        while (!body.empty() && (body.back() == '\r' || body.back() == '\n' || body.back() == ' '))
-            body.pop_back();
-        int exitCode = -1;
-        if (epos != std::string::npos) {
-            size_t p = epos + endMarker.size();
-            std::string digits;
-            while (p < plain.size() && plain[p] >= '0' && plain[p] <= '9') digits += plain[p++];
-            if (!digits.empty()) exitCode = std::atoi(digits.c_str());
-        }
-        pty.close();
-        if (g_json) {
-            Json j(cmd);
-            j.str("command", command).str("stdout", body).num("exitCode", exitCode);
-            printf("%s\n", j.ok().c_str());
-            return exitCode == 0 ? 0 : 0;  // JSON 模式下仍返回 0，exitCode 在字段里
-        }
-        fputs(body.c_str(), stdout);
-        if (!body.empty() && body.back() != '\n') fputs("\n", stdout);
-        return exitCode == 0 ? 0 : (exitCode > 0 ? exitCode : 1);
-    }
-    if (cmd == "shell" || cmd == "vm-shell") {
-        // 只做数据收发：行规程（行编辑/回显/历史/补全/Ctrl-C）全部交给远端 bash。
-        // 本地 tty 切 raw 是为了不产生第二份回显、也不让本地 tty 提前吃掉控制字符。
-        hvm::PtyConfig pcfg;
-        pcfg.winSize = localWinSize();
-        hvm::PtySession pty;
-        int rc = pty.open(pcfg, [](const char *d) {
-            size_t n = strlen(d);
-            size_t off = 0;
-            while (off < n) {
-                ssize_t w = write(STDOUT_FILENO, d + off, n - off);
-                if (w <= 0) break;
-                off += static_cast<size_t>(w);
-            }
-        });
-        if (rc != 0) return fail(cmd, rc, "打开 PTY 会话失败: " + pty.lastError());
-
-        struct termios oldt {}, rawt {};
-        bool rawOk = tcgetattr(STDIN_FILENO, &oldt) == 0;
-        if (rawOk) {
-            rawt = oldt;
-            cfmakeraw(&rawt);          // 关掉本地 ICANON/ECHO/ISIG 等所有行规程
-            tcsetattr(STDIN_FILENO, TCSANOW, &rawt);
-        }
-        signal(SIGWINCH, hvmOnWinch);
-        // 传输层就绪门：远端还没吐数据时发送会被静默丢弃
-        if (!hvm::waitForAnyOutput(20000) && !hvm::sessionClosed()) {
-            if (rawOk) tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-            pty.close();
-            return fail(cmd, -1, "等待远端就绪超时");
-        }
-        if (g_json) {
-            Json j(cmd);
-            j.num("sessionId", pty.sessionId());
-            printf("%s\n", j.ok().c_str());
-        }
-
-        const bool dbg = getenv("HVM_DEBUG") != nullptr;
-        if (dbg) fprintf(stderr, "[dbg] sessionId=%d closed=%d\n", pty.sessionId(),
-                         hvm::sessionClosed() ? 1 : 0);
-
-        // stdin 结束后不立刻关会话：继续把远端输出抽干，直到远端自己结束
-        // （管道用法下 `... | hvm-cli shell` 里常见的 `exit` 会触发远端关闭）。
-        const int eofWaitSec = [] {
-            const char *v = getenv("HVM_EOF_WAIT");
-            int s = v ? atoi(v) : 10;
-            return s > 0 ? s : 10;
-        }();
-        bool stdinEof = false;
-        auto deadline = std::chrono::steady_clock::now();
-        std::vector<char> buf(4096);
-
-        while (!hvm::sessionClosed()) {
-            if (g_winch) {
-                g_winch = 0;
-                pty.setWinSize(localWinSize());
-            }
-            if (stdinEof) {
-                if (std::chrono::steady_clock::now() >= deadline) break;
-                usleep(100000);
-                continue;
-            }
-            struct pollfd pfd {STDIN_FILENO, POLLIN, 0};
-            int pr = poll(&pfd, 1, 200);
-            if (pr < 0) break;
-            if (pr == 0) continue;
-            ssize_t n = read(STDIN_FILENO, buf.data(), buf.size());
-            if (n <= 0) {
-                stdinEof = true;
-                deadline = std::chrono::steady_clock::now() + std::chrono::seconds(eofWaitSec);
-                continue;
-            }
-            std::string chunk(buf.data(), static_cast<size_t>(n));
-            // 会话刚建立时远端可能还没就绪，发送会失败；重试而不是丢掉输入
-            for (int attempt = 0; attempt < 50; ++attempt) {
-                int src = pty.send(chunk);
-                if (dbg)
-                    fprintf(stderr, "[dbg] send %zu bytes attempt=%d rc=%d closed=%d\n",
-                            chunk.size(), attempt, src, hvm::sessionClosed() ? 1 : 0);
-                if (src == 0) break;
-                if (hvm::sessionClosed()) break;
-                usleep(100000);
-            }
-        }
-        if (rawOk) tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-        signal(SIGWINCH, SIG_DFL);
-        pty.close();
         return 0;
     }
 
