@@ -272,6 +272,36 @@ std::string humanBytes(int64_t bytes) {
         }                                                                            \
     } while (0)
 
+// ---------------------------------------------------------------- 路径转换
+//: 把"用户视图"路径转成"媒体库视图"路径 —— 后者是 vm_manager 与 stratovirt
+//: **两个域都能读**的形式，也正是 HAP 传给服务端的写法：
+//:
+//:   /storage/Users/currentUser/Download/x.iso
+//:      → /storage/media/100/local/files/Docs/Download/x.iso
+//:   file://docs/storage/Users/currentUser/Download/x.iso  （同上）
+//:
+//: 依据：实测正在安装 Windows 的虚拟机命令行里，光盘就是
+//:   file=/storage/media/100/local/files/Docs/Download/<bundle>/Win11_....iso
+//: 而 /storage/Users/... 与 hmdfs 真实路径都只对 vm_manager 可读、stratovirt 读不了。
+std::string toServicePath(const std::string &in) {
+    static const char *kUserPrefix = "file://docs/storage/Users/currentUser/";
+    static const char *kPlainPrefix = "/storage/Users/currentUser/";
+    static const char *kMediaPrefix = "/storage/media/";
+    static const char *kUserId = "100";  // 单用户设备；可用 HVM_USER_ID 覆盖
+
+    if (const char *env = getenv("HVM_USER_ID")) kUserId = env;
+
+    std::string rest;
+    if (in.rfind(kUserPrefix, 0) == 0) {
+        rest = in.substr(strlen(kUserPrefix));
+    } else if (in.rfind(kPlainPrefix, 0) == 0) {
+        rest = in.substr(strlen(kPlainPrefix));
+    } else {
+        return in;  // 已是服务端路径（/storage/media/... 或 /system/... 等）
+    }
+    return std::string(kMediaPrefix) + kUserId + "/local/files/Docs/" + rest;
+}
+
 // ---------------------------------------------------------------- vm 子命令
 //: CfgInfo 是华为私有类型（无公开头文件），这里按逆向配方手工构造。
 int cmdVm(Client &c, const std::vector<std::string> &pos) {
@@ -323,6 +353,17 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
             return 2;
         }
     }
+
+    // 用户视图路径 → 媒体库视图（服务端与 stratovirt 都读得到）
+    if (!bios.empty()) {
+        std::string t = toServicePath(bios);
+        if (t != bios) {
+            if (!g_json) printf("（路径转换）%s\n           → %s\n", bios.c_str(), t.c_str());
+            bios = t;
+        }
+    }
+    if (!enhance.empty()) enhance = toServicePath(enhance);
+    image = toServicePath(image);
 
     hvm::CfgInfoBuilder cfg;
     if (!cfg.ok()) return fail("vm " + act, -1, "构造 CfgInfo 失败: " + cfg.lastError());

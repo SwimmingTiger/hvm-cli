@@ -106,16 +106,27 @@ $ ./hvm-cli vm create --name myvm --image /path/to/win.iso \
 | `--image` | 路径 | 必须存在且**服务端进程**可读，且是 ISO 镜像（`DetectIsoType`） |
 | `--enhance` | 路径 | 必须存在且可读，扩展名必须是 `.iso`（`CheckEnhanceFilePath`）；缺省会导致 `create vm fail, enhance file path is null` |
 
-#### 路径必须写成服务端视角的真实路径
+#### 路径必须写成「媒体库视图」（唯一对两个域都可读的形式）
 
-服务端（hwf_service）`IsValidPath()` 只做 `realpath()`。它处在自己的挂载命名空间里，
-**看不到 `/storage/Users/...`，也读不了应用沙箱与 `/data/local/tmp`（SELinux 标签不允许）**。
-用户可见路径要换算成 hmdfs 真实路径：
+实测三种写法里只有一种可用（`hvm-cli` 会自动转换）：
+
+| 写法 | vm_manager 能读 | **stratovirt 能读**（挂光盘要靠它） |
+|---|---|---|
+| `/storage/Users/currentUser/Download/x.iso` | ✗ 它的命名空间里没有这个挂载 | — |
+| `/data/service/el2/100/hmdfs/account/files/Docs/Download/x.iso`（hmdfs 真实路径） | ✓ | ✗ `Permission denied` |
+| **`/storage/media/100/local/files/Docs/Download/x.iso`（媒体库视图）** | ✓ | ✓ |
+
+这个写法是从**正在安装 Windows 的第三方应用虚拟机**的命令行里抓到的：
 
 ```
-用户视图: /storage/Users/currentUser/Download/<app>/<file>.iso
-服务端视图: /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/<file>.iso
+if=none,id=disk,format=raw,media=cdrom,file=/storage/media/100/local/files/Docs/Download/<bundle>/Win11_....iso
+if=none,id=unattend,format=raw,media=cdrom,readonly=true,file=/storage/media/100/local/files/Docs/Download/<bundle>/server.iso
 ```
+
+即：HAP 把 ISO 放在用户下载目录后，传给服务端的是**媒体库视图**路径（服务端字符串里
+`^/storage/media/\d+/local/files/Docs/` 那条正则正是它的白名单）。
+`hvm-cli` 现在会自动把 `/storage/Users/currentUser/...` 或
+`file://docs/storage/Users/currentUser/...` 转换成该形式。
 
 磁盘**不需要**自己准备 qcow2 —— 框架会按 `CfgInfo.diskSize` 自行创建：
 

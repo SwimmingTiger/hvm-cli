@@ -358,6 +358,29 @@ CheckWinImgPath(175)     Windows 安装镜像判定
    否则 `create vm fail, enhance file path is null`。
 3. 磁盘不用自己造：框架按 `diskSize` 生成 `.../img/vm.qcow2`（稀疏，随写增长）。
 
+### 安装介质问题的正解：媒体库视图路径（实测）
+
+之前测出的"stratovirt 读不了 ISO"结论**只在两种路径写法下成立**。正确写法是
+**媒体库视图**：
+
+```
+/storage/media/100/local/files/Docs/Download/<bundle>/<file>.iso
+```
+
+- 抓取方式：观察一个**正在安装 Windows 的第三方应用虚拟机**（com.sanway.ecoengine）
+  的 `stratovirt` 命令行 —— 它的安装盘与 unattend 盘都是这个形式；
+- 换成该形式后：`IsValidPath` / `DetectIsoType` / `CheckFiles` 全部通过，
+  `CreateVm` 返回 0，启动后 stratovirt 命令行里两张光盘都挂上了，
+  `vmlog` 里 `Permission denied` 计数为 0；
+- `hvm-cli` 已内置转换：用户视图 `/storage/Users/currentUser/<p>` 与
+  `file://docs/storage/Users/currentUser/<p>` → `/storage/media/100/local/files/Docs/<p>`
+  （`HVM_USER_ID` 可覆盖 userId，默认 100）。
+
+另外：客户机串口不是走日志，而是 **virtio-serial unix socket**（在服务数据区）：
+`.../vm_manager/<hash>/<vm>/uds/serial0.sock`、`serial1.sock`；
+客户端可以通过 `SendDataToVm` / `RecvDataFromVm` + `ChannelInfo` 收发
+（服务端有 `ChannelInfo::Marshalling/Unmarshalling` 与 `GetSerialChannels`）。
+
 ### 仍未完成
 
 - 提供真实 ISO/qcow2 镜像后即可完成一次完整创建；
