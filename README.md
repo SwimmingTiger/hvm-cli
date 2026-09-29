@@ -74,26 +74,113 @@ $ ./openeuler image install    # 安装/更新 openEuler 镜像
 补全、Ctrl-C/Ctrl-D 全部由远端 bash/readline 处理；CLI 只额外把本地窗口尺寸变化
 同步给远端（SIGWINCH → `SetWinSize`）。
 
-## hvm-cli：创建 / 启动 / 销毁虚拟机
+## hvm-cli：虚拟机的创建 / 启动 / 暂停 / 停止 / 删除
 
-`CreateVm` / `StartVm` 需要一个 `CfgInfo` 对象，而它是华为私有类型（无头文件、库被
-strip）。本仓库按逆向出的**内联构造序列**手工构造它（见 `src/cfginfo.cpp` 与
-`include/ohos/vm_manager_service/cfg_info.h`），并已实测打通：
+> 必须在 **HiShell 终端**里运行（原因见[权限模型](#权限模型)）。
+> 下面命令里的路径都是**本机实测可用**的具体取值，换个文件名就能直接粘贴执行。
+
+### 1. 先看可用范围
 
 ```console
-$ ./hvm-cli vm range                     # 先查可用范围（服务端校验依据）
+$ ./hvm-cli vm range
 CPU 数范围     : 6 .. 8
-内存范围       : 6 .. 18
-
-$ ./hvm-cli vm ctor --cpu 6 --mem 8 --disk-gb 128     # 只构造，不调服务
-CfgInfo@0x... base=0x... vptr=0x...(base+0xB2F90)
-  cpuNum(+12) = 6 ... startType(+80) = -1
-
-$ ./hvm-cli vm create --name myvm --image /path/to/win.iso \
-      --bios /path/to/uefi.fd --cpu 6 --mem 8 --disk-gb 128 --apply
+内存范围       : 6 .. 18          # 单位 GB
 ```
 
-不带 `--apply` 时是**预演**（打印将发送的内容，不产生副作用）。
+磁盘下限为 65536 MB（= 64 GB），由服务端校验，不在上面这条输出里。
+
+### 2. 创建虚拟机（只建配置与磁盘，不开机）
+
+```console
+$ ./hvm-cli vm create \
+      --name myvm \
+      --image /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
+      --bios  /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
+      --cpu 6 --mem 8 --disk-gb 128 --apply
+CreateVm 返回 rc=0 (OK)
+```
+
+- `--image` 是安装盘 ISO。这个路径会被**自动转换**成媒体库视图
+  `/storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/debian-...iso`
+  —— 它是唯一能让 `stratovirt` 真正打开光盘的形式（原因见 [api-notes 第 10 节](docs/api-notes.md)）。
+  账号 id（这里是 `100`）取自 `$USER`，多账号设备上第二个账号是 `101`；
+- **磁盘不用自己准备**：框架按 `--disk-gb` 生成稀疏的
+  `/data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2`；
+- 不带 `--apply` 就是**预演**，只打印将要发送的内容、不产生副作用：
+
+  ```console
+  $ ./hvm-cli vm create --name myvm --image /storage/Users/currentUser/Download/.../debian-12.0.0-arm64-netinst.iso \
+        --bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi --cpu 6 --mem 8 --disk-gb 128
+  （预演）将调用 CreateVm
+    虚拟机名   : myvm
+    可用 CPU   : 6..8
+    可用内存   : 6..18 GB
+    镜像路径   : /storage/media/100/local/files/Docs/Download/.../debian-12.0.0-arm64-netinst.iso
+  ```
+
+### 3. 启动（开机）
+
+```console
+$ ./hvm-cli vm start --name myvm \
+      --bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
+      --cpu 6 --mem 8 --disk-gb 128 --apply
+```
+
+启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
+可以这样确认：
+
+```console
+$ ./hvm-cli vms myvm
+活动虚拟机: myvm
+名字                     状态     活动     磁盘镜像
+myvm                     9        是       /data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2
+
+$ pgrep -a stratovirt | grep myvm        # 命令行里能看到两张光盘的 file=
+```
+
+> 服务端可能返回 `405 (VM_IP_UNAVAILABLE)`：那只是"启动后立刻查客户机 IP 没查到"，
+> **不代表启动失败**，虚拟机通常已经跑起来了。
+
+### 4. 暂停 / 恢复
+
+```console
+$ ./hvm-cli pause                  # 暂停活动虚拟机
+$ ./hvm-cli resume myvm            # 恢复
+```
+
+### 5. 停止
+
+```console
+$ ./hvm-cli force-stop myvm        # 强制关机（当前唯一可用的"停止"）
+```
+
+> ⚠️ 正常关机（服务端 `StopVm(name, clean)`）**还没有对应的 CLI 命令**
+> —— 客户端封装里有 `stopVm()`，但没接到命令行上。见「实现状态」。
+
+### 6. 删除（连磁盘一起删）
+
+```console
+$ ./hvm-cli vm destroy myvm
+已销毁 myvm
+```
+
+### 7. 日常查看
+
+```console
+$ ./hvm-cli vms                          # 已知虚拟机一览
+$ ./hvm-cli active-name                  # 当前活动虚拟机
+$ ./hvm-cli vm-status myvm               # 状态码（0=未运行 9=运行中）
+$ ./hvm-cli --vm myvm disk path           # 磁盘镜像路径
+$ ./hvm-cli --vm myvm disk capacity       # 磁盘容量
+$ ./hvm-cli --vm myvm snapshot list       # 快照列表
+$ ./hvm-cli --vm myvm net ip              # 客户机 IPv4（需客户机已联网）
+```
+
+安装过程中的客户机文本输出（GRUB 菜单、控制台日志）可以从这里看到：
+
+```console
+$ tail -f /data/log/hwf_service/vmlog
+```
 
 ### 参数规则（逆向自服务端校验，实测确认）
 
@@ -215,6 +302,20 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 
 进程由 lldb-server 预先拉起并停在动态链接器入口，所以下完断点用 `continue`
 恢复，不要用 `run`。
+
+## 开发与验证命令（日常不需要）
+
+这些是逆向与自检用的，用户日常操作不需要它们：
+
+| 命令 | 用途 |
+|---|---|
+| `vm ctor [选项]` | 只构造 `CfgInfo` 入参对象并打印字段布局，**不调服务端**（验证构造配方） |
+| `vm view-state <0\|1\|2>` / `vm displays <id>` | 上报 `HapViewState` / 显示器 id 列表（研究视图机制用） |
+| `vm serial-read` / `vm serial-write` | 读写客户机通道（`ChannelInfo`） |
+| `vm import` / `vm export` | 服务端 `Import/ExportVmDiskImage`（UOS 磁盘迁移专用，见 api-notes §11） |
+| `hash-name` | 已禁用（服务端返回的指针在 `GetHashName` 内部会段错误） |
+| `selftest` | 两条通路的加载自检（`hvm-cli selftest` / `openeuler selftest`） |
+| `make symcheck` | 核对生成的 mangled 名与设备符号快照是否一致 |
 
 ## 目录结构
 
