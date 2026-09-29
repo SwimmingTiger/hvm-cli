@@ -105,17 +105,7 @@ CreateVm 返回 rc=0 (OK)
   —— 它是唯一能让 `stratovirt` 真正打开光盘的形式（原因见 [api-notes 第 10 节](docs/api-notes.md)）。
   账号 id（这里是 `100`）取自 `$USER`，多账号设备上第二个账号是 `101`；
 - **磁盘不用自己准备**：框架按 `--disk-gb` 生成稀疏的
-  `/data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2`；
-- 想先看服务端会收到什么（不产生副作用）用 `vm ctor`：它只构造并打印 `CfgInfo`，不调服务端：
-
-  ```console
-  $ ./hvm-cli vm ctor --cpu 6 --mem 8 --disk-gb 128
-  CfgInfo@0x... base=0x... vptr=0x...(base+0xB2F90)
-    cpuNum(+12)        = 6
-    memorySize(+16)    = 8 GB
-    diskSize(+20)      = 131072 MB
-    ...
-  ```
+  `/data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2`。
 
 ### 3. 启动（开机）
 
