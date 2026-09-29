@@ -335,6 +335,28 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (!enhance.empty()) cfg.setEnhanceFilePath(enhance);
     cfg.setStartType(startType);
 
+    if (act == "export") {
+        // 把虚拟机磁盘导出到用户可访问的位置（调查服务端期望的 qcow2 格式）
+        if (name.empty() || bios.empty() || enhance.empty()) {
+            fprintf(stderr, "用法: hvm-cli vm export --name N --src <服务端磁盘路径> --dst <用户区路径> [--apply]\n");
+            return 2;
+        }
+        hvm::MigrationOptionsBuilder opts;
+        if (!opts.ok()) return fail("vm export", -1, "构造 MigrationOptions 失败: " + opts.lastError());
+        if (!apply) {
+            printf("（预演）将调用 ExportVmDiskImage\n  虚拟机: %s\n  src : %s\n  dst : %s\n",
+                   name.c_str(), bios.c_str(), enhance.c_str());
+            return 0;
+        }
+        int rc = c.exportVmDiskImage(name, bios, enhance, false, opts.raw());
+        if (rc != 0)
+            return fail("vm export", rc,
+                        std::string("ExportVmDiskImage 返回: ") + ohos_vm_error_name(rc) + " (" +
+                            std::to_string(rc) + ")");
+        printf("已提交导出：%s -> %s\n", bios.c_str(), enhance.c_str());
+        return 0;
+    }
+
     if (act == "import") {
         // 让服务端把文件拷到指定位置（用于把 ISO 搬进 stratovirt 能读的服务数据区）
         if (name.empty() || bios.empty() || enhance.empty()) {

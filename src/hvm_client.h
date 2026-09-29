@@ -94,6 +94,9 @@ class Client {
     //: opts 为 MigrationOptionsBuilder 构造出的对象指针（服务端要求非空）
     int importVmDiskImage(const std::string &name, const std::string &src,
                           const std::string &dst, void *opts);
+    //: 反向：把虚拟机磁盘导出到用户可访问的位置（同样要求 MigrationOptions 非空）
+    int exportVmDiskImage(const std::string &name, const std::string &src,
+                          const std::string &dst, bool isRaw, void *opts);
     int stopVm(const std::string &name, bool clean);
 
     // ------------------------------------------------------------ 电源

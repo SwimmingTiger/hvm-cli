@@ -306,6 +306,21 @@ int Client::importVmDiskImage(const std::string &name, const std::string &src,
     }
 }
 
+int Client::exportVmDiskImage(const std::string &name, const std::string &src,
+                              const std::string &dst, bool isRaw, void *opts) {
+    // 符号：...17ExportVmDiskImageERKNSt3__h...EESA_SA_bRKNS_4sptrINS0_16MigrationOptionsEEE
+    using Fn = int (*)(void *, const std::string &, const std::string &, const std::string &,
+                       bool, const void *);
+    auto f = resolve<Fn>("ExportVmDiskImage");
+    if (f == nullptr) return kErrNoSymbol;
+    void *holder = opts;
+    try {
+        return f(instance_, name, src, dst, isRaw, &holder);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
 int Client::stopVm(const std::string &name, bool clean) {
     using Fn = int (*)(void *, const std::string &, bool);
     auto f = resolve<Fn>("StopVm");
