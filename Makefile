@@ -23,7 +23,7 @@ OE_HDRS  := src/fusion_pty.h
 
 PREFIX   ?= $(HOME)/.local
 
-.PHONY: all clean check check-repo install
+.PHONY: all clean check check-repo check-headers install
 
 all: $(BIN_VM) $(BIN_OE)
 
@@ -42,6 +42,12 @@ check: all
 	@./$(BIN_VM) info
 	@echo "--- openeuler（融合开发引擎）---"
 	@./$(BIN_OE) selftest
+
+# 逆向出来的公共头文件单独做语法检查（它们不参与两个命令的构建）
+check-headers:
+	@mkdir -p build
+	@printf '#include "ohos/vm_manager_service/cfg_info.h"\n#include "ohos/vm_manager_service/vm_manager_client_wrapper.h"\n#include "ohos/linux_fusion/fusion_pty_ndk.h"\nint main(void){return 0;}\n' > build/headers_check.cpp
+	@$(CXX) $(CXXFLAGS) -Iinclude -fsyntax-only build/headers_check.cpp && echo "✓ include/ 头文件语法检查通过"
 
 # 仓库卫生：被跟踪的文件里不允许有二进制（构建产物应被 .gitignore 忽略）
 check-repo:
