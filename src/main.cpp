@@ -683,6 +683,18 @@ int run(int argc, char **argv) {
         return 0;
     }
     if (cmd == "hash-name") {
+        // 实测：本机（未 provision，/data/virt_service 不存在）调用该接口会在
+        // 系统库内部解引用 *(this+184) 得到空指针而段错误，调试器抓到的现场：
+        //   VmManagerClient::GetHashName: ldr x0,[x0,#184]; ldr x9,[x0]  ← 崩在这
+        // 这是库自身的健壮性问题（我们的调用约定经其它按值返回接口验证无误），
+        // 因此这里直接拒绝执行，避免用户看到段错误。
+        fprintf(stderr,
+                "hash-name 已禁用：GetHashName 在本机未 provision 的环境下会在\n"
+                "系统库内空指针崩溃（VmManagerClient::GetHashName 解引用 *(this+184)）。\n"
+                "该接口与本地开发无关，如需请先让 vm_manager 完成 provisioning。\n");
+        return 3;
+    }
+    if (cmd == "hash-name-disabled") {
         std::string v;
         int rc = c.hashName(v);
         if (rc != 0) return fail(cmd, rc, "GetHashName 失败");

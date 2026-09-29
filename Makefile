@@ -23,7 +23,7 @@ OE_HDRS  := src/fusion_pty.h
 
 PREFIX   ?= $(HOME)/.local
 
-.PHONY: all clean check check-repo check-headers install
+.PHONY: all clean check check-repo check-headers syms symcheck install
 
 all: $(BIN_VM) $(BIN_OE)
 
@@ -46,8 +46,19 @@ check: all
 # 逆向出来的公共头文件单独做语法检查（它们不参与两个命令的构建）
 check-headers:
 	@mkdir -p build
-	@printf '#include "ohos/vm_manager_service/cfg_info.h"\n#include "ohos/vm_manager_service/vm_manager_client_wrapper.h"\n#include "ohos/linux_fusion/fusion_pty_ndk.h"\nint main(void){return 0;}\n' > build/headers_check.cpp
+	@printf '#include "ohos/vm_manager_service/cfg_info.h"\n#include "ohos/vm_manager_service/vm_manager_errcode.h"\n#include "ohos/vm_manager_service/vm_manager_kits.h"\n#include "ohos/linux_fusion/fusion_pty_ndk.h"\nint main(void){return 0;}\n' > build/headers_check.cpp
 	@$(CXX) $(CXXFLAGS) -Iinclude -fsyntax-only build/headers_check.cpp && echo "✓ include/ 头文件语法检查通过"
+
+# 重新生成 vm_manager_service/vm_manager_kits{,.syms}.h
+#   * 声明来自 docs/abi/*.symbols.txt（设备快照）
+#   * mangled 名由**编译器**从声明产出（scripts/abi-shim 把 libc++ 的
+#     inline namespace 切到系统库用的 __h），并与设备符号逐一核对
+syms:
+	@python3 scripts/gen-wrapper-api.py
+
+# 只核对、不写文件（改完声明或换了设备固件后跑这个）
+symcheck:
+	@python3 scripts/gen-wrapper-api.py --check
 
 # 仓库卫生：被跟踪的文件里不允许有二进制（构建产物应被 .gitignore 忽略）
 check-repo:

@@ -149,8 +149,9 @@ class Client {
     void *instance_ = nullptr;  //: VmManagerClientWrapper 单例（sptr 里的裸指针）
     std::string error_;
 
+    //: 按**方法名**在生成的符号表里查 mangled 名并 dlsym（见 vm_manager_kits.syms.h）
     template <typename T>
-    T resolve(const std::string &symbol) const;
+    T resolve(const char *methodName) const;
 };
 
 }  // namespace hvm

@@ -1,6 +1,8 @@
 // hvm_client.cpp —— 虚拟机客户端封装实现
 #include "hvm_client.h"
 
+#include "ohos/vm_manager_service/vm_manager_kits.syms.h"
+
 #include "ohos/vm_manager_service/vm_manager_errcode.h"
 
 #include <dlfcn.h>
@@ -10,12 +12,6 @@
 namespace hvm {
 namespace {
 
-// 客户端 kit 的 C++ 符号（std::string 使用 OHOS libc++ 的 inline namespace __h）
-constexpr const char *kWrapper = "_ZN4OHOS16VmManagerService22VmManagerClientWrapper";
-constexpr const char *kStringConst =
-    "ERKNSt3__h12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE";
-constexpr const char *kStringRef =
-    "ERNSt3__h12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE";
 
 // 本地错误码统一使用 include/ohos/vm_manager_service/vm_manager_errcode.h 中的定义
 constexpr int kErrNoSymbol = OHOS_VM_ERR_SYMBOL_MISSING;
@@ -36,8 +32,12 @@ const char *statusName(int status) {
 }
 
 template <typename T>
-T Client::resolve(const std::string &symbol) const {
-    return reinterpret_cast<T>(kit_ ? dlsym(kit_, symbol.c_str()) : nullptr);
+T Client::resolve(const char *methodName) const {
+    // 符号名由 scripts/gen-wrapper-api.py 从声明生成并与设备符号核对过，
+    // 不在代码里手写 mangled 字符串（手抄极易出错）。
+    const char *mangled = OHOS::VmManagerService::abi::FindSym(methodName);
+    if (kit_ == nullptr || mangled == nullptr) return nullptr;
+    return reinterpret_cast<T>(dlsym(kit_, mangled));
 }
 
 Client::Client() {
@@ -49,7 +49,7 @@ Client::Client() {
     }
     using GetInstance = void *(*)();
     auto getInstance =
-        resolve<GetInstance>(std::string(kWrapper) + "11GetInstanceEv");
+        resolve<GetInstance>("GetInstance");
     if (getInstance == nullptr) {
         error_ = "找不到 VmManagerClientWrapper::GetInstance 符号";
         return;
@@ -81,7 +81,7 @@ std::string Client::selfTest() const {
 // ---------------------------------------------------------------------- 状态
 int Client::activeVmName(std::string &out) {
     using Fn = int (*)(void *, std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "15GetActiveVmName" + kStringRef);
+    auto f = resolve<Fn>("GetActiveVmName");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, out);
@@ -92,7 +92,7 @@ int Client::activeVmName(std::string &out) {
 
 int Client::activeVmStatus(int &out) {
     using Fn = int (*)(void *, int &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "17GetActiveVmStatusERi");
+    auto f = resolve<Fn>("GetActiveVmStatus");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, out);
@@ -103,7 +103,7 @@ int Client::activeVmStatus(int &out) {
 
 int Client::vmStatus(const std::string &vm, int &out) {
     using Fn = int (*)(void *, const std::string &, int &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "11GetVmStatus" + kStringConst + "Ri");
+    auto f = resolve<Fn>("GetVmStatus");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, out);
@@ -114,7 +114,7 @@ int Client::vmStatus(const std::string &vm, int &out) {
 
 int Client::checkVmCapability(bool &out) {
     using Fn = int (*)(void *, bool &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "17CheckVmCapabilityERb");
+    auto f = resolve<Fn>("CheckVmCapability");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, out);
@@ -125,7 +125,7 @@ int Client::checkVmCapability(bool &out) {
 
 int Client::isProcessExist(const std::string &name) {
     using Fn = int (*)(void *, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "14IsProcessExist" + kStringConst);
+    auto f = resolve<Fn>("IsProcessExist");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, name);
@@ -136,7 +136,7 @@ int Client::isProcessExist(const std::string &name) {
 
 int Client::isFeatureSupported(int featureId, bool &out) {
     using Fn = int (*)(void *, int, bool &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "18IsFeatureSupportedEiRb");
+    auto f = resolve<Fn>("IsFeatureSupported");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, featureId, out);
@@ -147,7 +147,7 @@ int Client::isFeatureSupported(int featureId, bool &out) {
 
 int Client::availableCpuRange(uint32_t &minVal, uint32_t &maxVal) {
     using Fn = int (*)(void *, unsigned int &, unsigned int &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "25GetVmAvailableCpuNumRangeERjS2_");
+    auto f = resolve<Fn>("GetVmAvailableCpuNumRange");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, minVal, maxVal);
@@ -158,7 +158,7 @@ int Client::availableCpuRange(uint32_t &minVal, uint32_t &maxVal) {
 
 int Client::availableMemoryRange(uint32_t &minVal, uint32_t &maxVal) {
     using Fn = int (*)(void *, unsigned int &, unsigned int &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "29GetVmAvailableMemorySizeRangeERjS2_");
+    auto f = resolve<Fn>("GetVmAvailableMemorySizeRange");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, minVal, maxVal);
@@ -169,7 +169,7 @@ int Client::availableMemoryRange(uint32_t &minVal, uint32_t &maxVal) {
 
 int Client::openEulerVersion(std::string &out) {
     using Fn = int (*)(void *, std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "19GetOpenEulerVersion" + kStringRef);
+    auto f = resolve<Fn>("GetOpenEulerVersion");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, out);
@@ -181,7 +181,7 @@ int Client::openEulerVersion(std::string &out) {
 int Client::hashName(std::string &out) {
     // 该接口按值返回 std::string（sret）
     using Fn = std::string (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "11GetHashNameEv");
+    auto f = resolve<Fn>("GetHashName");
     if (f == nullptr) return kErrNoSymbol;
     try {
         out = f(instance_);
@@ -193,7 +193,7 @@ int Client::hashName(std::string &out) {
 
 int Client::isQuickStartScenario() {
     using Fn = int (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "20IsQuickStartScenarioEv");
+    auto f = resolve<Fn>("IsQuickStartScenario");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_);
@@ -204,7 +204,7 @@ int Client::isQuickStartScenario() {
 
 int Client::isInstalling() {
     using Fn = int (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "17CheckIsInstallingEv");
+    auto f = resolve<Fn>("CheckIsInstalling");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_);
@@ -233,8 +233,7 @@ int Client::createVm(const std::string &name, const std::string &imagePath, void
     // 第 4 参是 const sptr<CfgInfo>&，而 sptr 的内存布局就是单个指针，
     // 因此传入「指向该指针的指针」即 ABI 等价。
     using Fn = int (*)(void *, const std::string &, const std::string &, const void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "8CreateVm" + kStringConst +
-                         "SA_RKNS_4sptrINS0_7CfgInfoEEE");
+    auto f = resolve<Fn>("CreateVm");
     if (f == nullptr) return kErrNoSymbol;
     void *holder = cfgObj;
     try {
@@ -246,8 +245,7 @@ int Client::createVm(const std::string &name, const std::string &imagePath, void
 
 int Client::startVm(const std::string &name, void *cfgObj) {
     using Fn = int (*)(void *, const std::string &, const void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "7StartVm" + kStringConst +
-                         "RKNS_4sptrINS0_7CfgInfoEEE");
+    auto f = resolve<Fn>("StartVm");
     if (f == nullptr) return kErrNoSymbol;
     void *holder = cfgObj;
     try {
@@ -259,7 +257,7 @@ int Client::startVm(const std::string &name, void *cfgObj) {
 
 int Client::destroyVm(const std::string &name) {
     using Fn = int (*)(void *, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "9DestroyVm" + kStringConst);
+    auto f = resolve<Fn>("DestroyVm");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, name);
@@ -271,7 +269,7 @@ int Client::destroyVm(const std::string &name) {
 int Client::mountCdDrive(const std::string &name, const std::string &path, bool insert,
                          std::string &out) {
     using Fn = int (*)(void *, const std::string &, const std::string &, bool, std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "16MountCDDriveToVm" + kStringConst + "SA_bRS8_");
+    auto f = resolve<Fn>("MountCDDriveToVm");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, name, path, insert, out);
@@ -282,7 +280,7 @@ int Client::mountCdDrive(const std::string &name, const std::string &path, bool 
 
 int Client::unmountCdDrive(const std::string &name, const std::string &path) {
     using Fn = int (*)(void *, const std::string &, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "20UnmountCDDriveFromVm" + kStringConst + "SA_");
+    auto f = resolve<Fn>("UnmountCDDriveFromVm");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, name, path);
@@ -296,8 +294,7 @@ int Client::importVmDiskImage(const std::string &name, const std::string &src,
     // 符号：...17ImportVmDiskImageERKNSt3__h...EESA_SA_RKNS_4sptrINS_16MigrationOptionsEEE
     using Fn = int (*)(void *, const std::string &, const std::string &, const std::string &,
                        const void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "17ImportVmDiskImage" + kStringConst +
-                         "SA_SA_RKNS_4sptrINS0_16MigrationOptionsEEE");
+    auto f = resolve<Fn>("ImportVmDiskImage");
     if (f == nullptr) return kErrNoSymbol;
     void *holder = nullptr;  // 空的 sptr<MigrationOptions>
     try {
@@ -309,7 +306,7 @@ int Client::importVmDiskImage(const std::string &name, const std::string &src,
 
 int Client::stopVm(const std::string &name, bool clean) {
     using Fn = int (*)(void *, const std::string &, bool);
-    auto f = resolve<Fn>(std::string(kWrapper) + "6StopVm" + kStringConst + "b");
+    auto f = resolve<Fn>("StopVm");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, name, clean);
@@ -321,7 +318,7 @@ int Client::stopVm(const std::string &name, bool clean) {
 // ---------------------------------------------------------------------- 电源
 int Client::forceStop(const std::string &vm) {
     using Fn = int (*)(void *, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "11ForceStopVm" + kStringConst);
+    auto f = resolve<Fn>("ForceStopVm");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm);
@@ -332,7 +329,7 @@ int Client::forceStop(const std::string &vm) {
 
 int Client::quitByRebootHost() {
     using Fn = int (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "18VmQuitByRebootHostEv");
+    auto f = resolve<Fn>("VmQuitByRebootHost");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_);
@@ -343,7 +340,7 @@ int Client::quitByRebootHost() {
 
 int Client::requireBigMem() {
     using Fn = int (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "13RequireBigMemEv");
+    auto f = resolve<Fn>("RequireBigMem");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_);
@@ -356,8 +353,7 @@ int Client::requireBigMem() {
 int Client::snapshotList(const std::string &vm,
                          std::vector<std::pair<std::string, std::string>> &out) {
     using Fn = int (*)(void *, const std::string &, std::map<std::string, std::string> &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "15GetSnapshotList" + kStringConst +
-                         "RNS2_3mapIS8_S8_NS2_4lessIS8_EENS6_INS2_4pairIS9_S8_EEEEEE");
+    auto f = resolve<Fn>("GetSnapshotList");
     if (f == nullptr) return kErrNoSymbol;
     try {
         std::map<std::string, std::string> m;
@@ -372,7 +368,7 @@ int Client::snapshotList(const std::string &vm,
 
 int Client::snapshotCreate(const std::string &vm, const std::string &name) {
     using Fn = int (*)(void *, const std::string &, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "14CreateSnapshot" + kStringConst + "SA_");
+    auto f = resolve<Fn>("CreateSnapshot");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, name);
@@ -383,7 +379,7 @@ int Client::snapshotCreate(const std::string &vm, const std::string &name) {
 
 int Client::snapshotRestore(const std::string &vm, const std::string &name) {
     using Fn = int (*)(void *, const std::string &, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "15RestoreSnapshot" + kStringConst + "SA_");
+    auto f = resolve<Fn>("RestoreSnapshot");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, name);
@@ -394,7 +390,7 @@ int Client::snapshotRestore(const std::string &vm, const std::string &name) {
 
 int Client::snapshotDestroy(const std::string &vm, const std::string &name) {
     using Fn = int (*)(void *, const std::string &, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "15DestroySnapshot" + kStringConst + "SA_");
+    auto f = resolve<Fn>("DestroySnapshot");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, name);
@@ -406,7 +402,7 @@ int Client::snapshotDestroy(const std::string &vm, const std::string &name) {
 int Client::snapshotRename(const std::string &vm, const std::string &from,
                            const std::string &to) {
     using Fn = int (*)(void *, const std::string &, const std::string &, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "14RenameSnapshot" + kStringConst + "SA_SA_");
+    auto f = resolve<Fn>("RenameSnapshot");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, from, to);
@@ -418,7 +414,7 @@ int Client::snapshotRename(const std::string &vm, const std::string &from,
 // ---------------------------------------------------------------------- 共享目录
 int Client::sharedFolder(std::string &out) {
     using Fn = std::string (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "15GetSharedFolderEv");
+    auto f = resolve<Fn>("GetSharedFolder");
     if (f == nullptr) return kErrNoSymbol;
     try {
         out = f(instance_);
@@ -430,7 +426,7 @@ int Client::sharedFolder(std::string &out) {
 
 int Client::sharedFolderEnabled(bool &out) {
     using Fn = bool (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "22GetSharedFolderEnabledEv");
+    auto f = resolve<Fn>("GetSharedFolderEnabled");
     if (f == nullptr) return kErrNoSymbol;
     try {
         out = f(instance_);
@@ -442,7 +438,7 @@ int Client::sharedFolderEnabled(bool &out) {
 
 int Client::setSharedFolderEnabled(bool enabled) {
     using Fn = void (*)(void *, bool);
-    auto f = resolve<Fn>(std::string(kWrapper) + "22SetSharedFolderEnabledEb");
+    auto f = resolve<Fn>("SetSharedFolderEnabled");
     if (f == nullptr) return kErrNoSymbol;
     try {
         f(instance_, enabled);
@@ -455,7 +451,7 @@ int Client::setSharedFolderEnabled(bool enabled) {
 int Client::addSharedFolder(const std::string &vm, const std::string &host,
                             const std::string &guest) {
     using Fn = int (*)(void *, const std::string &, const std::string &, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "15AddSharedFolder" + kStringConst + "SA_SA_");
+    auto f = resolve<Fn>("AddSharedFolder");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, host, guest);
@@ -466,7 +462,7 @@ int Client::addSharedFolder(const std::string &vm, const std::string &host,
 
 int Client::removeSharedFolder(const std::string &vm, const std::string &host) {
     using Fn = int (*)(void *, const std::string &, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "18RemoveSharedFolder" + kStringConst + "SA_");
+    auto f = resolve<Fn>("RemoveSharedFolder");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, host);
@@ -477,7 +473,7 @@ int Client::removeSharedFolder(const std::string &vm, const std::string &host) {
 
 int Client::setupSharedFolder(const std::string &vm) {
     using Fn = int (*)(void *, const std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "17SetUpSharedFolder" + kStringConst);
+    auto f = resolve<Fn>("SetUpSharedFolder");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm);
@@ -489,7 +485,7 @@ int Client::setupSharedFolder(const std::string &vm) {
 // ---------------------------------------------------------------------- 网络
 int Client::vmIpv4Address(const std::string &vm, std::string &out) {
     using Fn = int (*)(void *, const std::string &, std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "16GetVmIpv4Address" + kStringConst + "RS8_");
+    auto f = resolve<Fn>("GetVmIpv4Address");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, out);
@@ -500,7 +496,7 @@ int Client::vmIpv4Address(const std::string &vm, std::string &out) {
 
 int Client::hostNetProxyStatus(const std::string &vm, bool &out) {
     using Fn = int (*)(void *, const std::string &, bool &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "23GetVmHostNetProxyStatus" + kStringConst + "Rb");
+    auto f = resolve<Fn>("GetVmHostNetProxyStatus");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, out);
@@ -511,7 +507,7 @@ int Client::hostNetProxyStatus(const std::string &vm, bool &out) {
 
 int Client::switchNetworkShare(const std::string &vm, bool on) {
     using Fn = int (*)(void *, const std::string &, bool);
-    auto f = resolve<Fn>(std::string(kWrapper) + "20SwitchVmNetworkShare" + kStringConst + "b");
+    auto f = resolve<Fn>("SwitchVmNetworkShare");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, on);
@@ -522,7 +518,7 @@ int Client::switchNetworkShare(const std::string &vm, bool on) {
 
 int Client::setDnsAutoSync(const std::string &vm, bool on) {
     using Fn = int (*)(void *, const std::string &, bool);
-    auto f = resolve<Fn>(std::string(kWrapper) + "21SetDnsAutoSyncEnabled" + kStringConst + "b");
+    auto f = resolve<Fn>("SetDnsAutoSyncEnabled");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, on);
@@ -534,7 +530,7 @@ int Client::setDnsAutoSync(const std::string &vm, bool on) {
 // ---------------------------------------------------------------------- 磁盘
 int Client::diskCapacity(const std::string &vm, int64_t &bytes) {
     using Fn = int (*)(void *, const std::string &, int64_t &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "17GetVmDiskCapacity" + kStringConst + "Rl");
+    auto f = resolve<Fn>("GetVmDiskCapacity");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, bytes);
@@ -545,7 +541,7 @@ int Client::diskCapacity(const std::string &vm, int64_t &bytes) {
 
 int Client::diskImagePath(const std::string &vm, std::string &out) {
     using Fn = int (*)(void *, const std::string &, std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "18GetVmDiskImagePath" + kStringConst + "RS8_");
+    auto f = resolve<Fn>("GetVmDiskImagePath");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, out);
@@ -556,7 +552,7 @@ int Client::diskImagePath(const std::string &vm, std::string &out) {
 
 int Client::diskImageFileSize(const std::string &vm, int64_t &bytes) {
     using Fn = int (*)(void *, const std::string &, int64_t &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "22GetVmDiskImageFileSize" + kStringConst + "Rl");
+    auto f = resolve<Fn>("GetVmDiskImageFileSize");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, bytes);
@@ -567,7 +563,7 @@ int Client::diskImageFileSize(const std::string &vm, int64_t &bytes) {
 
 int Client::expandCapacity(const std::string &vm, int sizeGb) {
     using Fn = int (*)(void *, const std::string &, int);
-    auto f = resolve<Fn>(std::string(kWrapper) + "16VmExpandCapacity" + kStringConst + "i");
+    auto f = resolve<Fn>("VmExpandCapacity");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, vm, sizeGb);
@@ -578,7 +574,7 @@ int Client::expandCapacity(const std::string &vm, int sizeGb) {
 
 int Client::deleteLinuxDataImage() {
     using Fn = int (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "20DeleteLinuxDataImageEv");
+    auto f = resolve<Fn>("DeleteLinuxDataImage");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_);
@@ -590,7 +586,7 @@ int Client::deleteLinuxDataImage() {
 // ---------------------------------------------------------------------- 虚拟机信息
 int Client::getVmInfo(uint32_t &ddrSizeMb, uint32_t &vmPid) {
     using Fn = int (*)(void *, unsigned int &, unsigned int &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "9GetVmInfoERjS2_");
+    auto f = resolve<Fn>("GetVmInfo");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, ddrSizeMb, vmPid);
@@ -601,7 +597,7 @@ int Client::getVmInfo(uint32_t &ddrSizeMb, uint32_t &vmPid) {
 
 int Client::stratovirtMem(int &memMb) {
     using Fn = int (*)(void *);
-    auto f = resolve<Fn>(std::string(kWrapper) + "16GetStratovirtMemEv");
+    auto f = resolve<Fn>("GetStratovirtMem");
     if (f == nullptr) return kErrNoSymbol;
     try {
         memMb = f(instance_);
@@ -613,7 +609,7 @@ int Client::stratovirtMem(int &memMb) {
 
 int Client::activeVmStatusForShutdown(int &out) {
     using Fn = int (*)(void *, int &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "28GetActiveVmStatusForShutdownERi");
+    auto f = resolve<Fn>("GetActiveVmStatusForShutdown");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, out);
@@ -624,7 +620,7 @@ int Client::activeVmStatusForShutdown(int &out) {
 
 int Client::hostSn(std::string &out) {
     using Fn = int (*)(void *, std::string &);
-    auto f = resolve<Fn>(std::string(kWrapper) + "9GetHostSN" + kStringRef);
+    auto f = resolve<Fn>("GetHostSN");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, out);
@@ -636,7 +632,7 @@ int Client::hostSn(std::string &out) {
 // ---------------------------------------------------------------------- 显示 / 内存
 int Client::modifyResolution(uint32_t width, uint32_t height, bool fullScreen) {
     using Fn = int (*)(void *, uint32_t, uint32_t, bool);
-    auto f = resolve<Fn>(std::string(kWrapper) + "16ModifyResolutionEjjb");
+    auto f = resolve<Fn>("ModifyResolution");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, width, height, fullScreen);
@@ -647,7 +643,7 @@ int Client::modifyResolution(uint32_t width, uint32_t height, bool fullScreen) {
 
 int Client::touchVmMem(uint32_t size) {
     using Fn = int (*)(void *, uint32_t);
-    auto f = resolve<Fn>(std::string(kWrapper) + "10TouchVmMemEj");
+    auto f = resolve<Fn>("TouchVmMem");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, size);
@@ -658,7 +654,7 @@ int Client::touchVmMem(uint32_t size) {
 
 int Client::set2dSwapSpace(int size) {
     using Fn = int (*)(void *, int);
-    auto f = resolve<Fn>(std::string(kWrapper) + "14Set2DSwapSpaceEi");
+    auto f = resolve<Fn>("Set2DSwapSpace");
     if (f == nullptr) return kErrNoSymbol;
     try {
         return f(instance_, size);
