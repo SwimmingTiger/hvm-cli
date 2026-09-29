@@ -111,28 +111,26 @@ void usage() {
         "  --vm <名字>     目标虚拟机名，默认 virtualized_linux\n"
         "\n"
         "状态:\n"
-        "  selftest                客户端 kit 加载自检\n"
         "  info                    汇总状态（能力/活动 VM/版本/共享目录）\n"
         "  list                    枚举我们自己记录的虚拟机清单（见 preferences 下的清单文件）\n"
         "  vms [名字...]           按已知名字探测虚拟机（服务端无枚举接口）\n"
         "\n"
         "虚拟机生命周期（CfgInfo 为逆向手工构造，见 docs/api-notes.md）：\n"
-        "  vm ctor   [选项]        仅构造 CfgInfo 并打印（验证用，不调服务）\n"
+
         "  vm create --name N --image P [选项]\n"
         "  vm start  --name N [选项]\n"
-        "  vm view-state <0|1|2>              上报 HapViewState（应用用它告知视图状态）\n"
-        "  vm displays <id[,id...]>           把显示器 id 列表交给服务端\n"
-        "  vm serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
-        "  vm serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
+
+
+
+
         "  vm range                查询可用的 CPU / 内存范围（服务端校验依据）\n"
-        "  vm import --name N --src SRC --dst DST  让服务端拷贝文件（搬 ISO）\n"
+
         "  vm mount-cd   --name N --image X.iso   挂载安装光盘\n"
         "  vm unmount-cd --name N --image X.iso   卸载\n"
         "  vm destroy N            销毁虚拟机\n"
         "    选项: --cpu N --mem GB --disk MB | --disk-gb GB\n"
         "          --bios PATH --enhance PATH --start-type N --partition --dynamic-mem\n"
         "    单位（实测）：memorySize 为 GB（范围见 vm range），diskSize 为 MB 且 >= 65536\n"
-        "          --start-type N --partition --dynamic-mem\n"
         "  pause / resume [名字]   暂停 / 恢复虚拟机\n"
         "  lock-guest              锁定客户机（LockGuest）\n"
         "  lx-ota                  Linux 环境 OTA（LxOtaHandle）\n"
@@ -145,13 +143,13 @@ void usage() {
         "  net localhost-ports        查询本机转发表（GetLocalhostForwardFromVmToHost）\n"
         "  linux-data-delete       删除 Linux 数据镜像\n"
         "  rgm-image-delete <镜像> 删除 RGM 镜像（DeleteRgmImageFromVm）\n"
-        "  share-volumes           列出全部共享卷（GetAllSharedVolume）\n"
-        "  linux-path <宿主路径..> 宿主路径 → 客户机内路径（GetLinuxPathFromOhPath）\n"
+
+
         "  gallery-share on|off    宿主图库共享（SetHostGallerySharedEnabled）\n"
         "  guest-disk-share <路径> on|off  客户机磁盘共享\n"
         "  pasteboard [status|enable|disable|usable-enable|usable-disable|add A B|remove A]\n"
-        "  buffer avail|low <字节> 内存缓冲上限\n"
-        "  perf <a> <b> / perf-ex <a> on|off <b>  性能请求\n"
+
+
         "  screen-lock-task on|off 锁屏任务开关\n"
         "  tablet <int>            平板切换上报\n"
         "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
@@ -164,7 +162,7 @@ void usage() {
         "  process-exist <进程名>  进程是否存在\n"
         "  feature <ID>            特性是否支持\n"
         "  open-euler-version      openEuler 镜像版本\n"
-        "  hash-name               Hash 名\n"
+
         "  quick-start             是否快速启动场景\n"
         "  is-installing           是否安装中\n"
         "\n"
@@ -194,7 +192,22 @@ void usage() {
         "显示/内存:\n"
         "  resolution <宽> <高> [--full]\n"
         "  touch-mem <MB>\n"
-        "  swap-2d <MB>\n");
+        "  swap-2d <MB>\n"
+        "\n"
+        "开发与验证命令（日常不需要；逆向/自检用，部分在 HiShell 身份下不可用）：\n"
+        "  vm ctor [选项]          仅构造 CfgInfo 并打印（不调服务，验证构造配方）\n"
+        "  vm view-state <0|1|2>   上报 HapViewState（研究视图机制）\n"
+        "  vm displays <id[,…]>    把显示器 id 列表交给服务端（同上）\n"
+        "  vm serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
+        "  vm serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
+        "  vm import --name N --src SRC --dst DST   服务端拷贝（UOS 磁盘迁移专用）\n"
+        "  vm export --name N --src SRC --dst DST   同上（导出）\n"
+        "  selftest                kit 加载自检\n"
+        "  hash-name               Hash 名（服务端实现有缺陷，已禁用）\n"
+        "  share-volumes           列出全部共享卷（返回元素类型未还原，已禁用）\n"
+        "  linux-path <宿主路径..> 宿主→客户机路径（服务端只允许 LinuxFusion 服务调用）\n"
+        "  buffer avail|low <字节> 上报内存阈值（是“上报”而非查询，慎用）\n"
+        "  perf <a> <b> / perf-ex <a> on|off <b>  性能请求（服务端 permission denied）\n");
 }
 
 // ---------------------------------------------------------------- 主逻辑

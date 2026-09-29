@@ -367,6 +367,10 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 | `vm import` / `vm export` | 服务端 `Import/ExportVmDiskImage`（UOS 磁盘迁移专用，见 api-notes §11） |
 | `hash-name` | 已禁用（服务端返回的指针在 `GetHashName` 内部会段错误） |
 | `selftest` | 两条通路的加载自检（`hvm-cli selftest` / `openeuler selftest`） |
+| `share-volumes` | 列出全部共享卷（`GetAllSharedVolume` 的返回元素类型未还原，命令保留但直接报错） |
+| `linux-path <宿主路径..>` | 宿主路径 → 客户机内路径；服务端只允许 LinuxFusion 服务调用，HiShell 身份会被拒 |
+| `buffer avail\|low <字节>` | 上报内存阈值（语义是"应用上报"，不是查询，慎用） |
+| `perf <a> <b>` / `perf-ex …` | 性能请求；服务端返回 `permission denied` |
 | `make symcheck` | 核对生成的 mangled 名与设备符号快照是否一致 |
 
 ## 目录结构
