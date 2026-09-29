@@ -101,15 +101,26 @@ hwf_service uid 7700、openEuler HAP）都是系统服务或专用应用，用�
 
 ## 5. 已知返回码
 
+均为**实测**得到（括号里是 32 位十六进制，便于与 OHOS 错误码风格对照）：
+
 | 场景 | 返回码 | 说明 |
 |---|---|---|
 | 成功 | `0` | |
-| 无虚拟机时的快照查询 | `0xF8FF000C`（signed −117506036） | OHOS 统一错误码风格 |
-| 无虚拟机时的 `GetOpenEulerVersion` | `201` | |
-| 本工具本地错误 | `-1001` kit 未加载 / `-1002` 符号缺失 | 与系统返回码区分 |
+| 虚拟机名非法（长度 / `..`） | `401` (`0x191`) | `CreateVm` 首个参数校验 |
+| 镜像/参数路径缺失 | `402` (`0x192`) | `CreateVm` 的 imagePath 读失败 |
+| `CfgInfo` 缺失或解析失败 | `404` (`0x194`) | |
+| `VM_IP_UNAVAILABLE` | `405` (`0x195`) | 查不到客户机 IP；**启动后立即查 IP 也会返回它**（客户机还没起来），不代表启动失败 |
+| 无虚拟机（`GetHostSN` / `GetOpenEulerVersion` 等） | `201` (`0xC9`) | |
+| 无虚拟机时的快照查询 | `−117506036` (`0xF8FF000C`) | |
+| 已有实例在运行（`CreateVm` / `StartVm` 被拒） | `−16842742` (`0xFEFF000A`) | 服务端 `CheckMultipleVmState:1787 not support multiple vm instances`；注意**多台虚拟机可以并存，但同时只能有一台在运行** |
+| 强制删除 RGM 镜像时未找到 | `−1000` (`0xFFFFFC18`) | |
+| `RecoverUserData` 失败 | `−16842744` (`0xFEFF0008`) | |
+| 端口转发：查询对象不是当前运行实例 | `−151060472` / `−151060470` (`0xF6FF0008` / `0xF6FF000A`) | 服务端 `GetPortForwardForNat:1416 not current running instance` |
+| 磁盘容量查询失败 | `−234946554` (`0xF1FF0006`) | |
+| 本工具本地错误 | `−1001` kit 未加载 / `−1002` 符号缺失 | 与系统返回码区分 |
 
-状态码（`GetVmStatus`）服务端**没有把枚举名编进二进制**，目前只实测到
-`0`（无虚拟机运行）。其余取值需在有虚拟机运行时逐个观测补全。
+`GetVmStatus` 的状态码实测：`0` = 无虚拟机运行、`9` = 运行中。
+**服务端没有把枚举名编进二进制**，其余取值需在对应状态下逐个观测补全。
 
 ## 6. 创建/启动虚拟机：线上格式与引擎侧线索
 
@@ -162,8 +173,10 @@ blockdev-snapshot-internal-sync  trace-get-state
 ## 7. 复现调查的命令
 
 ```bash
-# SA 注册信息
-cat /system/profile/vm_manager.json
+# SA 注册信息：设备上 /system/profile 对本身份不可读（hdc 的 uid 2000 也一样），
+# 改从固件解包里查：
+#   <unpack_result>/system/system/profile/vm_manager.json   （SA 65621）
+# 同类 VM 相关 SA 还有：hwf_service / linux_fusion_service / exfusion_display_service 等
 # 客户端导出符号
 nm -D --defined-only /system/lib64/libvm_manager_kits.z.so | grep VmManagerClientWrapper
 # 接口描述符（UTF-16LE 常量）：转码后过滤
@@ -357,11 +370,10 @@ CheckWinImgPath(175)     Windows 安装镜像判定
 
 **三个坑**（都实测踩过）：
 
-1. 镜像路径必须是**服务端视角**的路径。`/storage/Users/...`、应用沙箱
-   （`/data/storage/el2/base/...`，SELinux 标签不允许）、`/data/local/tmp`
-   （`data_local_tmp` 标签）都会让 `realpath()` 失败并报
-   `Standardized path fail!`；换成 hmdfs 真实路径
-   `/data/service/el2/100/hmdfs/account/files/Docs/...` 立刻通过。
+1. 镜像路径必须写成**媒体库视图** `/storage/media/<账号 id>/local/files/Docs/...`
+   —— 这是唯一让 `vm_manager` 与 `stratovirt` 两个域都能读的形式，详见第 10 节。
+   （`/storage/Users/...` 会让 `realpath()` 直接失败并报 `Standardized path fail!`；
+   hmdfs 真实路径虽然能过校验，但 `stratovirt` 打开时被 SELinux 拒绝。）
 2. `enhanceFilePath`（CfgInfo+56）**不能为空**且必须是 `.iso` 文件，
    否则 `create vm fail, enhance file path is null`。
 3. 磁盘不用自己造：框架按 `diskSize` 生成 `.../img/vm.qcow2`（稀疏，随写增长）。
@@ -642,15 +654,40 @@ ToggleScreenLockTask TabletSwitchChanged
 不是"查询/设置系统值"。
 ⚠️ 因此不要随意设置：实测时用过 1 字节，随后已恢复为 8 GiB（8589934592）。
 
-### 14.5 仍未接的 42 个方法
+### 14.5 仍未接的 33 个方法（清单由代码现状生成）
 
-| 组 | 方法 |
+```
+BackgroundChangeEvent           CreateVmApplicationForm      FocusStateChangeEvent
+MountUSBToVm                    UnmountUSBFromVm
+NotifyDataRecoveryProgress      NotifyHapExitToVm           NotifyRequireBigMemFinish
+NotifyUpdateRgmConfigResult     NotifyVirtioMemoryChanged   NotifyVmDiskExported
+NotifyVmDiskMigrationProgress   NotifyVmEvent               NotifyVmStatusChanged
+RedirectGuestUserProfile        UpdateEulerOSImage
+RegVmEventCallback              UnRegVmEventCallback        RegisterDeathRecipient
+Register/UnregisterDataRecoveryCallback
+Register/UnregisterRequireBigMemCallback
+Register/UnregisterVirtioMemoryCallback
+Register/UnregisterVmDiskExportedCallback
+Register/UnregisterVmDiskMigrationCallback
+Register/UnregisterVmStatusCallback
+StartAutoPauseMonitor           StopAutoPauseMonitor
+```
+
+按组说明卡点：
+
+| 组 | 卡点 |
 |---|---|
-| 端口转发 | `SetPortForwardForNat` `GetPortForwardForNat` `Set/GetLocalhostForwardFromVmToHost`（需要私有类 `PortInfoList`） |
-| USB 直通 | `MountUSBToVm` `UnmountUSBFromVm`（需要私有类 `USBDevice`） |
-| 自动暂停 | `SetAutoPauseTime`（需要私有类 `AutoPauseTime`）`Start/StopAutoPauseMonitor` |
-| 镜像与快照运维 | `UpdateEulerOSImage` `HandleLxSnapshot` `GetRgmImageStatusFromVm` `RecoverUserData` `RedirectGuestUserProfile` `GetAllSharedVolume` `GetLinuxPathFromOhPath` |
-| 事件回调 | `RegVmEventCallback` `UnRegVmEventCallback`、`Register/Unregister{VmStatus,DataRecovery,RequireBigMem,VirtioMemory,VmDiskExported,VmDiskMigration}`、`RegisterDeathRecipient` |
-| 服务端通知实现 | `Notify{VmStatusChanged,VmEvent,HapExitToVm,VmDiskExported,VmDiskMigrationProgress,DataRecoveryProgress,VirtioMemoryChanged,RequireBigMemFinish,UpdateRgmConfigResult}` |
-| 视图/表单 | `CreateVmApplicationForm` `BackgroundChangeEvent` `FocusStateChangeEvent` |
-| 其他 | `SetVmNetMode`（需要 `NetMode` 枚举语义）、`CreateVmApplicationForm` 相关的表单能力 |
+| 事件回调（12 个 `Register*` / `RegVmEventCallback` / `RegisterDeathRecipient`） | 需要逆向 listener 接口对象的 vtable 并注册（同 `CfgInfo`/`MigrationOptions` 的工作方式） |
+| 服务端通知实现（9 个 `Notify*`） | 是服务端 → 客户端的回调实现，配合上面那组一起做才完整 |
+| USB 直通（`Mount/UnmountUSBToVm`） | `USBDevice` 布局已还原（大小 `0x80`、RefBase@+56、+24/+48/+72 三个 string、+96/+100/+104 三个 uint32、vtable 地址点 `0xB45F8+0x18`），但六个数值字段语义未定 |
+| `UpdateEulerOSImage` | 需要实现 `IUpdateEulerOSImageCb` 回调接口 |
+| `CreateVmApplicationForm` / `BackgroundChangeEvent` / `FocusStateChangeEvent` | 视图/表单相关，参数是私有类或视图枚举 |
+| `Start/StopAutoPauseMonitor` | 与已接的 `SetAutoPauseTime` 配套 |
+| `RedirectGuestUserProfile` | 参数语义未定 |
+
+**已接但待实测**（因当前没有可用的运行中虚拟机，见 §14.2 的说明）：
+`Get/SetPortForwardForNat`、`Get/SetLocalhostForwardFromVmToHost` —— 签名与传参已被服务端
+接受（错误信息为 `not current running instance`），但条目解析与写入行为尚未端到端验证。
+
+> `GetLinuxPathFromOhPath` 与 `VmUniSocPerfRequest(Ex)` 已接但**服务端按调用者身份拒绝**
+> （见 §14.3），不属于"未实现"。

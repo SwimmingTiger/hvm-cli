@@ -59,7 +59,7 @@ class VmManagerClientWrapper {
     int32_t AddPasteboardSharedFolder(const std::string &, const std::string &);
     int32_t AddSharedFolder(const std::string &, const std::string &, const std::string &);
     int32_t BackgroundChangeEvent(const BackgroundState &);
-    bool CheckIsInstalling();  // 推断：Check* 语义
+    bool CheckIsInstalling();  // 实测：返回 bool（CLI 打印 否）
     int32_t CheckVmCapability(bool &);
     int32_t CreateSnapshot(const std::string &, const std::string &);
     int32_t CreateVm(const std::string &, const std::string &, const sptr<CfgInfo> &);
@@ -75,21 +75,21 @@ class VmManagerClientWrapper {
     int32_t GetActiveVmName(std::string &);
     int32_t GetActiveVmStatus(int32_t &);
     int32_t GetActiveVmStatusForShutdown(int32_t &);
-    std::vector<std::string> GetAllSharedVolume();  // 推断：与 GetSharedFolder 同类
+    std::vector<std::string> GetAllSharedVolume();  // 实测否定：元素不是 string，待还原
     std::string GetHashName();  // 实测：sret 返回 std::string
     int32_t GetHostSN(std::string &);
     static sptr<VmManagerClientWrapper> GetInstance();  // 实测：sret 返回 sptr
     int32_t GetLinuxPathFromOhPath(const std::vector<std::string> &, std::vector<std::string> &);
     int32_t GetLocalhostForwardFromVmToHost(const std::string &, sptr<PortInfoList> &);
     int32_t GetOpenEulerVersion(std::string &);
-    bool GetPasteboardEnableState();  // 推断：Get*State 语义
-    bool GetPasteboardUsableState();  // 推断：Get*State 语义
+    bool GetPasteboardEnableState();  // 实测：返回 bool（CLI 打印 开）
+    bool GetPasteboardUsableState();  // 实测：返回 bool（CLI 打印 可用）
     int32_t GetPortForwardForNat(const std::string &, sptr<PortInfoList> &);
     int32_t GetRgmImageStatusFromVm(const std::string &);
     std::string GetSharedFolder();  // 实测：sret 返回 std::string
     bool GetSharedFolderEnabled();  // 实测：返回 bool
     int32_t GetSnapshotList(const std::string &, std::map<std::string, std::string> &);
-    int64_t GetStratovirtMem();  // 推断：内存用量（实测 CLI 打印过 MB 数值）
+    int64_t GetStratovirtMem();  // 实测：返回字节数（11061624 B ≈ 10.5 MiB）
     int32_t GetVmAvailableCpuNumRange(uint32_t &, uint32_t &);
     int32_t GetVmAvailableMemorySizeRange(uint32_t &, uint32_t &);
     int32_t GetVmDiskCapacity(const std::string &, int64_t &);
@@ -103,7 +103,7 @@ class VmManagerClientWrapper {
     int32_t ImportVmDiskImage(const std::string &, const std::string &, const std::string &, const sptr<MigrationOptions> &);
     int32_t IsFeatureSupported(int32_t, bool &);
     int32_t IsProcessExist(const std::string &);
-    bool IsQuickStartScenario();  // 推断：Is* 语义
+    bool IsQuickStartScenario();  // 实测：返回 bool（CLI 打印 否）
     int32_t LockGuest();
     int32_t LxOtaHandle();
     int32_t ModifyResolution(uint32_t, uint32_t, bool);

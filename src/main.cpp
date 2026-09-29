@@ -152,7 +152,7 @@ void usage() {
         "  screen-lock-task on|off 锁屏任务开关\n"
         "  tablet <int>            平板切换上报\n"
         "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
-        "  stratovirt-mem          stratoVirt 占用内存\n"
+        "  stratovirt-mem          stratoVirt 占用内存（字节）\n"
         "  host-sn                 宿主 SN\n"
         "  capability              本机是否支持虚拟化\n"
         "  active-name             活动虚拟机名\n"
@@ -971,15 +971,17 @@ int run(int argc, char **argv) {
         return 0;
     }
     if (cmd == "stratovirt-mem") {
-        int mem = 0;
+        int64_t mem = 0;
         int rc = c.stratovirtMem(mem);
         if (rc != 0) return fail(cmd, rc, "GetStratovirtMem 失败");
         if (g_json) {
             Json j(cmd);
-            j.num("memMb", mem);
+            j.num("bytes", mem);
             printf("%s\n", j.ok().c_str());
         } else {
-            printf("%d MB\n", mem);
+            // 接口返回字节数（实测 11061624 B），顺带给人看的 MiB
+            printf("%lld 字节 (%.1f MiB)\n", static_cast<long long>(mem),
+                   static_cast<double>(mem) / (1024.0 * 1024.0));
         }
         return 0;
     }

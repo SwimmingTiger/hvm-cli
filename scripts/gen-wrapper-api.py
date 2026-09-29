@@ -7,12 +7,13 @@ gen-wrapper-api.py —— 生成 OHOS::VmManagerService::VmManagerClientWrapper 
 本脚本改成：
 
   1. 从 docs/abi/vm_manager_client_wrapper.symbols.txt（设备符号快照）取出方法名与参数；
-  2. 生成 **真正的 C++ 声明**（include/.../vm_manager_client_wrapper.h），别人 #include
-     即可正常写代码、正常链接（在设备侧构建时）；
+  2. 生成 **真正的 C++ 声明**（include/ohos/vm_manager_service/vm_manager_kits.h），
+     别人 #include 即可正常写代码、正常链接（在设备侧构建时）；
   3. 生成一个探测 TU，**用 ABI 命名空间 shim（`__h`）编译**，再用 llvm-nm 取出
      编译器产出的 mangled 名 —— 即符号表来自声明而非手抄；
   4. 把编译产物与设备快照**逐一核对**，全部一致才写出
-     include/.../vm_manager_client_wrapper.syms.h（供 dlopen + dlsym 使用）。
+     include/ohos/vm_manager_service/vm_manager_kits.syms.h（供 dlopen + dlsym 使用，
+     用 abi::FindSym(方法名) 取符号）。
 
 返回类型说明：Itanium 名字改编不含返回类型，因此
   * 带出参（引用）的方法一律是 ErrCode（int32_t）—— 已实测；
@@ -44,13 +45,15 @@ RET_OVERRIDES = {
     "GetInstance": ("sptr<VmManagerClientWrapper>", "static", "实测：sret 返回 sptr"),
     "GetHashName": ("std::string", "", "实测：sret 返回 std::string"),
     "GetSharedFolder": ("std::string", "", "实测：sret 返回 std::string"),
-    "GetAllSharedVolume": ("std::vector<std::string>", "", "推断：与 GetSharedFolder 同类"),
-    "GetStratovirtMem": ("int64_t", "", "推断：内存用量（实测 CLI 打印过 MB 数值）"),
+    # ⚠️ 实测否定：按 vector<string> 解释会段错误（析构不匹配），元素是私有类，
+    #    需像 PortInfoList 那样从服务端 Unmarshalling 还原后才能接。见 api-notes §14.3
+    "GetAllSharedVolume": ("std::vector<std::string>", "", "实测否定：元素不是 string，待还原"),
+    "GetStratovirtMem": ("int64_t", "", "实测：返回字节数（11061624 B ≈ 10.5 MiB）"),
     "GetSharedFolderEnabled": ("bool", "", "实测：返回 bool"),
-    "IsQuickStartScenario": ("bool", "", "推断：Is* 语义"),
-    "CheckIsInstalling": ("bool", "", "推断：Check* 语义"),
-    "GetPasteboardEnableState": ("bool", "", "推断：Get*State 语义"),
-    "GetPasteboardUsableState": ("bool", "", "推断：Get*State 语义"),
+    "IsQuickStartScenario": ("bool", "", "实测：返回 bool（CLI 打印 否）"),
+    "CheckIsInstalling": ("bool", "", "实测：返回 bool（CLI 打印 否）"),
+    "GetPasteboardEnableState": ("bool", "", "实测：返回 bool（CLI 打印 开）"),
+    "GetPasteboardUsableState": ("bool", "", "实测：返回 bool（CLI 打印 可用）"),
 }
 
 #: 不放进头文件的方法（析构等）

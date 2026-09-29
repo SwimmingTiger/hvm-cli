@@ -187,9 +187,13 @@ isOpenEulerHap:%d`）。因此从系统自带终端 **HiShell** 启动的进程�
 ## 构建
 
 ```bash
-make            # 同时生成 hvm-cli 与 openeuler
-make check      # 分别自检两条通路
-make install    # 可选，装到 ~/.local/bin
+make              # 同时生成 hvm-cli 与 openeuler
+make check        # 分别自检两条通路
+make check-headers  # 语法检查 include/ 里的公共头文件
+make syms         # 重新生成 vm_manager_kits.h / .syms.h
+make symcheck     # 核对生成的 mangled 名与设备符号快照是否 121/121 一致
+make check-repo   # 确认仓库里没有二进制文件
+make install      # 可选，装到 ~/.local/bin
 ```
 
 ## 调试
@@ -216,12 +220,18 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 
 | 路径 | 说明 |
 |---|---|
-| `src/hvm_client.h/.cpp` | vm_manager 客户端封装（dlopen + dlsym → 类型化接口） |
-| `src/main.cpp` | `hvm-cli` 命令入口 |
-| `src/fusion_pty.h/.cpp` | LinuxFusion PTY 通道封装 |
+| `src/main.cpp` | `hvm-cli` 命令入口（含媒体库视图路径转换） |
+| `src/hvm_client.h/.cpp` | vm_manager 客户端封装（dlopen + dlsym → 类型化接口，已接 87/120 个方法） |
+| `src/cfginfo.h/.cpp` | 手工构造私有类：`CfgInfo` / `MigrationOptions` / `ChannelInfo` / `PortInfoList` |
+| `src/fusion_pty.h/.cpp` | LinuxFusion PTY 通道封装（`openeuler` 的底层） |
 | `src/openeuler_main.cpp` | `openeuler` 命令入口 |
-| `docs/api-notes.md` | 逆向笔记：SA、白名单、PTY 通道 C ABI、CfgInfo 构造、已知返回码 |
-| `scripts/hwdbg.sh` | 沙箱内可用的 lldb 调试封装（华为 lldb-server） |
+| `include/` | **逆向还原的公共头文件**（可直接 `#include` 调用私有库），见 [`include/README.md`](include/README.md) |
+| `docs/api-notes.md` | 逆向笔记 §1–§14：白名单、ABI 陷阱、线上格式、安装介质路径、通道、能力边界、接口覆盖 |
+| `docs/abi/vm_manager_client_wrapper.symbols.txt` | 设备导出符号快照（121 个方法与 mangled 名，生成器的核对基准） |
+| `scripts/gen-wrapper-api.py` | 生成 `vm_manager_kits.h` 与 `.syms.h`；借 ABI shim 让**编译器**产出 mangled 名并与设备核对 |
+| `scripts/abi-shim/__config_site` | 强制 `_LIBCPP_ABI_NAMESPACE __h`，使本机 clang 产出的符号名与设备库一致 |
+| `scripts/hwdbg.sh` | 沙箱内可用的 lldb 调试封装（CodeArts IDE 提供的 lldb-server） |
+| `scripts/check-no-binary.sh` | 提交前检查：仓库内不得有二进制文件 |
 
 ## 实现状态
 

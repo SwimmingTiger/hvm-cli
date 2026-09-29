@@ -940,12 +940,12 @@ int Client::getVmInfo(uint32_t &ddrSizeMb, uint32_t &vmPid) {
     }
 }
 
-int Client::stratovirtMem(int &memMb) {
-    using Fn = int (*)(void *);
+int Client::stratovirtMem(int64_t &bytes) {
+    using Fn = int64_t (*)(void *);
     auto f = resolve<Fn>("GetStratovirtMem");
     if (f == nullptr) return kErrNoSymbol;
     try {
-        memMb = f(instance_);
+        bytes = f(instance_);
         return 0;
     } catch (...) {
         return kErrNoSymbol;
