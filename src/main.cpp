@@ -4,11 +4,14 @@
 // 不需要 Python、不需要 root、不需要 HAP。
 #include <cstdint>
 #include <cstdio>
+#include <termios.h>
+#include <unistd.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "fusion_pty.h"
 #include "hvm_client.h"
 
 namespace {
@@ -100,6 +103,13 @@ void usage() {
         "状态:\n"
         "  selftest                客户端 kit 加载自检\n"
         "  info                    汇总状态（能力/活动 VM/版本/共享目录）\n"
+        "  exec <命令...>          在 openEuler 虚拟机里执行命令并打印输出\n"
+        "  shell                   连入 openEuler 虚拟机交互式 shell（Ctrl-D 退出）\n"
+        "  pty-selftest            fusion PTY 通道自检\n"
+        "  vms [名字...]           列出/探测虚拟机（无枚举接口，按名字探测）\n"
+        "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
+        "  stratovirt-mem          stratoVirt 占用内存\n"
+        "  host-sn                 宿主 SN\n"
         "  capability              本机是否支持虚拟化\n"
         "  active-name             活动虚拟机名\n"
         "  active-status           活动虚拟机状态码\n"
@@ -163,6 +173,34 @@ Args parse(int argc, char **argv, int from) {
     return a;
 }
 
+//: 去掉 ANSI 转义序列，便于脚本消费
+std::string stripAnsi(const std::string &in) {
+    std::string out;
+    for (size_t i = 0; i < in.size();) {
+        unsigned char c = static_cast<unsigned char>(in[i]);
+        if (c == 0x1B) {  // ESC
+            if (i + 1 < in.size() && in[i + 1] == '[') {
+                i += 2;
+                while (i < in.size() && !((in[i] >= '@' && in[i] <= '~'))) ++i;
+                if (i < in.size()) ++i;
+                continue;
+            }
+            if (i + 1 < in.size() && in[i + 1] == ']') {  // OSC ... BEL/ST
+                i += 2;
+                while (i < in.size() && in[i] != 0x07 && in[i] != 0x1B) ++i;
+                if (i < in.size() && in[i] == 0x1B) ++i;
+                if (i < in.size()) ++i;
+                continue;
+            }
+            ++i;
+            continue;
+        }
+        out += static_cast<char>(c);
+        ++i;
+    }
+    return out;
+}
+
 //: 计算字符串的终端显示宽度（CJK 记 2 列）
 int displayWidth(const std::string &s) {
     int w = 0;
@@ -179,6 +217,13 @@ int displayWidth(const std::string &s) {
         i += len;
     }
     return w;
+}
+
+//: 按显示宽度右侧补空格（用于表格列）
+std::string padTo(const std::string &s, int width) {
+    std::string o = s;
+    for (int i = displayWidth(s); i < width; ++i) o += ' ';
+    return o;
 }
 
 //: 按显示宽度补空格后打印 "标签 : 值"
@@ -276,6 +321,230 @@ int run(int argc, char **argv) {
         } else {
             printf("%s\n", st.c_str());
         }
+        return 0;
+    }
+
+    if (cmd == "vms") {
+        // vm_manager 没有提供枚举接口：以 GetActiveVmName 为准，
+        // 再对已知/指定的名字逐个探测状态与磁盘镜像。
+        std::vector<std::string> names =
+            a.pos.empty() ? std::vector<std::string>{a.vm} : a.pos;
+        std::string active;
+        c.activeVmName(active);
+        if (g_json) {
+            std::string arr = "[";
+            for (size_t i = 0; i < names.size(); ++i) {
+                int st = 0;
+                int rc = c.vmStatus(names[i], st);
+                std::string path;
+                c.diskImagePath(names[i], path);
+                if (i) arr += ",";
+                arr += "{\"name\":\"" + jsonEscape(names[i]) +
+                       "\",\"rc\":" + std::to_string(rc) +
+                       ",\"status\":" + std::to_string(st) +
+                       ",\"active\":" + ((names[i] == active) ? "true" : "false") +
+                       ",\"diskImage\":\"" + jsonEscape(path) + "\"}";
+            }
+            arr += "]";
+            Json j("vms");
+            j.str("activeVm", active).raw("vms", arr);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s\n", ("活动虚拟机: " +
+                             std::string(active.empty() ? "(无)" : active)).c_str());
+            printf("%s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
+                   padTo("活动", 8).c_str(), "磁盘镜像");
+            for (const auto &n : names) {
+                int st = 0;
+                c.vmStatus(n, st);
+                std::string path;
+                c.diskImagePath(n, path);
+                printf("%s %s %s %s\n", padTo(n, 24).c_str(),
+                       padTo(std::to_string(st), 8).c_str(),
+                       padTo(n == active ? "是" : "否", 8).c_str(),
+                       path.empty() ? "(无)" : path.c_str());
+            }
+            printf("\n注: vm_manager 未提供枚举接口，此表按已知名字探测得出。\n");
+        }
+        return 0;
+    }
+    if (cmd == "vm-info") {
+        uint32_t ddr = 0, pid = 0;
+        int rc = c.getVmInfo(ddr, pid);
+        if (rc != 0) return fail(cmd, rc, "GetVmInfo 失败（可能没有活动虚拟机）");
+        if (g_json) {
+            Json j(cmd);
+            j.num("ddrSizeMb", ddr).num("vmPid", pid);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printRow("DDR 大小", std::to_string(ddr) + " MB");
+            printRow("虚拟机 PID", std::to_string(pid));
+        }
+        return 0;
+    }
+    if (cmd == "stratovirt-mem") {
+        int mem = 0;
+        int rc = c.stratovirtMem(mem);
+        if (rc != 0) return fail(cmd, rc, "GetStratovirtMem 失败");
+        if (g_json) {
+            Json j(cmd);
+            j.num("memMb", mem);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%d MB\n", mem);
+        }
+        return 0;
+    }
+    if (cmd == "host-sn") {
+        std::string sn;
+        int rc = c.hostSn(sn);
+        if (rc != 0) return fail(cmd, rc, "GetHostSN 失败");
+        if (g_json) {
+            Json j(cmd);
+            j.str("sn", sn);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s\n", sn.c_str());
+        }
+        return 0;
+    }
+
+    // ------------------------------------------------------------ fusion PTY
+    if (cmd == "pty-selftest") {
+        std::string st = hvm::PtySession::selfTest();
+        if (g_json) {
+            Json j(cmd);
+            j.str("pty", st);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s\n", st.c_str());
+        }
+        return 0;
+    }
+    if (cmd == "exec" || cmd == "vm-exec") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "用法: hvm-cli exec <命令...>\n");
+            return 2;
+        }
+        std::string command;
+        for (size_t i = 0; i < a.pos.size(); ++i) {
+            if (i) command += " ";
+            command += a.pos[i];
+        }
+        hvm::PtyConfig pcfg;
+        pcfg.winSize = {40, 120, 0, 0};
+        hvm::PtySession pty;
+        std::string out;
+        int rc = pty.open(pcfg, [&out](const char *d) { out += d; });
+        if (rc != 0) return fail(cmd, rc, "打开 PTY 会话失败: " + pty.lastError());
+
+        // 等 shell 提示符出现（新会话会先打欢迎信息）
+        hvm::waitForOutput("$ ", 20000) || hvm::waitForOutput("# ", 1000);
+
+        // 标记在 shell 侧拼出来，避免"命令回显"里出现与输出相同的字面量，
+        // 否则等待结束标记会立刻命中回显、误判命令已结束。
+        const std::string m = "__HVM_END";
+        const std::string startMarker = m + "_START";
+        const std::string endMarker = m + "__";
+        std::string line = "M=" + m + "; echo ${M}_START; " + command +
+                           "; echo ${M}__$?\n";
+        int src = pty.send(line);
+        if (src != 0) {
+            pty.close();
+            return fail(cmd, src, "发送命令失败");
+        }
+        bool finished = hvm::waitForOutput(endMarker.c_str(), 60000);
+        if (!finished && !hvm::sessionClosed()) {
+            pty.close();
+            return fail(cmd, -1, "等待命令结束超时");
+        }
+        if (!finished && hvm::sessionClosed()) {
+            // shell 被命令本身结束（如 exit N）。库不转发退出码，只能报告"已结束"。
+            pty.close();
+            if (g_json) {
+                Json j(cmd);
+                j.str("command", command).str("stdout", "").num("exitCode", -1);
+                printf("%s\n", j.ok().c_str());
+                return 0;
+            }
+            fprintf(stderr, "会话已被命令结束（收不到结束标记，退出码不可得）\n");
+            return 1;
+        }
+        std::string plain = stripAnsi(out);
+        size_t spos = plain.find(startMarker);
+        size_t epos = plain.find(endMarker, spos == std::string::npos ? 0 : spos);
+        std::string body;
+        if (spos != std::string::npos && epos != std::string::npos) {
+            body = plain.substr(spos + startMarker.size(), epos - spos - startMarker.size());
+        } else {
+            body = plain;
+        }
+        // 去掉标记行前后的 CR/LF 与提示符残留
+        while (!body.empty() && (body.front() == '\r' || body.front() == '\n')) body.erase(0, 1);
+        while (!body.empty() && (body.back() == '\r' || body.back() == '\n' || body.back() == ' '))
+            body.pop_back();
+        int exitCode = -1;
+        if (epos != std::string::npos) {
+            size_t p = epos + endMarker.size();
+            std::string digits;
+            while (p < plain.size() && plain[p] >= '0' && plain[p] <= '9') digits += plain[p++];
+            if (!digits.empty()) exitCode = std::atoi(digits.c_str());
+        }
+        pty.close();
+        if (g_json) {
+            Json j(cmd);
+            j.str("command", command).str("stdout", body).num("exitCode", exitCode);
+            printf("%s\n", j.ok().c_str());
+            return exitCode == 0 ? 0 : 0;  // JSON 模式下仍返回 0，exitCode 在字段里
+        }
+        fputs(body.c_str(), stdout);
+        if (!body.empty() && body.back() != '\n') fputs("\n", stdout);
+        return exitCode == 0 ? 0 : (exitCode > 0 ? exitCode : 1);
+    }
+    if (cmd == "shell" || cmd == "vm-shell") {
+        hvm::PtyConfig pcfg;
+        pcfg.winSize = {40, 120, 0, 0};
+        hvm::PtySession pty;
+        int rc = pty.open(pcfg, [](const char *d) {
+            fputs(d, stdout);
+            fflush(stdout);
+        });
+        if (rc != 0) return fail(cmd, rc, "打开 PTY 会话失败: " + pty.lastError());
+        hvm::waitForOutput("$ ", 20000) || hvm::waitForOutput("# ", 1000);
+        printf("[已连入 openEuler 环境，输入 exit 退出]\n");
+        struct termios oldt {}, rawt {};
+        bool rawOk = tcgetattr(STDIN_FILENO, &oldt) == 0;
+        if (rawOk) {
+            rawt = oldt;
+            rawt.c_lflag &= ~(ICANON | ECHO);
+            rawt.c_cc[VMIN] = 1;
+            rawt.c_cc[VTIME] = 0;
+            tcsetattr(STDIN_FILENO, TCSANOW, &rawt);
+        }
+        std::string line;
+        char ch = 0;
+        while (true) {
+            ssize_t n = read(STDIN_FILENO, &ch, 1);
+            if (n <= 0) break;
+            if (ch == '\n') {
+                // 字符已逐个发送，这里只补回车，避免整行重复下发
+                pty.send("\n");
+                if (line == "exit" || line == "logout") break;
+                line.clear();
+            } else if (ch == 0x04) {  // Ctrl-D
+                pty.send("exit\n");
+                break;
+            } else if (ch == 0x7F || ch == 0x08) {
+                if (!line.empty()) line.pop_back();
+                pty.send("\x7f");
+            } else {
+                line += ch;
+                std::string k(1, ch);
+                pty.send(k);
+            }
+        }
+        if (rawOk) tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        pty.close();
         return 0;
     }
 

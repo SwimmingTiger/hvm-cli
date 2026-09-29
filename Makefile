@@ -11,8 +11,8 @@ CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra
 LDLIBS   ?= -ldl
 
 BIN      := hvm-cli
-SRCS     := src/hvm_client.cpp src/main.cpp
-HDRS     := src/hvm_client.h
+SRCS     := src/hvm_client.cpp src/fusion_pty.cpp src/main.cpp
+HDRS     := src/hvm_client.h src/fusion_pty.h
 PREFIX   ?= $(HOME)/.local
 
 .PHONY: all clean check install

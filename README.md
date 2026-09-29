@@ -76,18 +76,45 @@ sudo make install    # 可选，装到 ~/.local/bin
 hvm-cli --json info | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['capable'])"
 ```
 
+## 连入 openEuler 虚拟机执行命令
+
+系统里还有一条**通往 openEuler 访客的 PTY 通道**（HiShell 终端的"连接 openEuler
+执行命令"就是这个功能），入口是 NDK 库
+`/system/lib64/ndk/libfusion_pty_ndk.so`。本工具直接调用它：
+
+```console
+$ ./hvm-cli exec 'uname -r; cat /etc/os-release | head -2; id -un'
+6.6.0
+NAME="openEuler"
+VERSION="24.03 (LTS-SP3)"
+hu60
+
+$ ./hvm-cli exec 'hostname; ip -4 addr show | grep inet'   # 任意命令
+$ ./hvm-cli shell                                          # 交互式 shell
+$ ./hvm-cli pty-selftest                                   # 通道自检
+dlopen=ok;manager=ok;open=ok;send=ok
+```
+
+`exec` 的退出码即远端命令的退出码；`--json` 输出 `{"stdout":...,"exitCode":N}`，
+便于脚本消费。实测环境：openEuler 24.03 LTS-SP3 / kernel 6.6.0 / 172.16.105.2。
+
+该库没有公开头文件，`OhPtyConfig`、回调等结构是从二进制里恢复出来的
+（见 [docs/api-notes.md](docs/api-notes.md#7-fusion-pty-通道)）。
+
 ## 目录结构
 
 | 路径 | 说明 |
 |---|---|
 | `src/hvm_client.h/.cpp` | 客户端封装：dlopen/dlsym + 类型化接口 |
 | `src/main.cpp` | CLI 入口、子命令分发、文本/JSON 输出 |
-| `docs/api-notes.md` | 逆向笔记：SA、接口、白名单、状态码 |
+| `src/fusion_pty.h/.cpp` | fusion PTY 通道：连入 openEuler 执行命令 |
+| `docs/api-notes.md` | 逆向笔记：SA、接口、白名单、PTY 通道、状态码 |
 
 ## 实现状态
 
 - [x] 调用链路打通（`GetActiveVmName` / `CheckVmCapability` / `GetVmStatus` / `IsProcessExist`）
 - [x] 状态、能力、电源（强制关机）、快照、共享目录、网络、磁盘、显示、内存
+- [x] 连入 openEuler 访客执行命令（`exec` / `shell`，走 fusion PTY NDK 通道）
 - [ ] 启动/创建虚拟机（`StartVm` / `CreateVm` 需要 `CfgInfo`，逆向中）
 - [ ] 事件回调（`RegisterVmStatusCallback` 等）
 

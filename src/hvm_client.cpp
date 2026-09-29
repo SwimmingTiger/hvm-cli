@@ -471,6 +471,52 @@ int Client::deleteLinuxDataImage() {
     }
 }
 
+// ---------------------------------------------------------------------- 虚拟机信息
+int Client::getVmInfo(uint32_t &ddrSizeMb, uint32_t &vmPid) {
+    using Fn = int (*)(void *, unsigned int &, unsigned int &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "9GetVmInfoERjS2_");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, ddrSizeMb, vmPid);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::stratovirtMem(int &memMb) {
+    using Fn = int (*)(void *);
+    auto f = resolve<Fn>(std::string(kWrapper) + "16GetStratovirtMemEv");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        memMb = f(instance_);
+        return 0;
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::activeVmStatusForShutdown(int &out) {
+    using Fn = int (*)(void *, int &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "28GetActiveVmStatusForShutdownERi");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, out);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::hostSn(std::string &out) {
+    using Fn = int (*)(void *, std::string &);
+    auto f = resolve<Fn>(std::string(kWrapper) + "9GetHostSN" + kStringRef);
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, out);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
 // ---------------------------------------------------------------------- 显示 / 内存
 int Client::modifyResolution(uint32_t width, uint32_t height, bool fullScreen) {
     using Fn = int (*)(void *, uint32_t, uint32_t, bool);

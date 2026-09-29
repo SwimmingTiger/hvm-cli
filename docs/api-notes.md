@@ -158,3 +158,64 @@ EOF
 # 实测调用
 ./hvm-cli selftest && ./hvm-cli info
 ```
+
+## 7. fusion PTY 通道
+
+HiShell 的"连接 openEuler 执行命令"用的不是 vm_manager，而是 **LinuxFusion PTY**：
+
+- HAP 侧 napi 模块：`@ohos:fusion_pty_napi`（`libs` 里还有 `@ohos:linux_developer_napi`）
+- **NDK 入口**：`/system/lib64/ndk/libfusion_pty_ndk.so`
+- 配套：`libfusion_pty_{common,manager,manager_client,session,session_client}.z.so`
+- 传输：virtio-vsock（HiShell 字节码里可见 `VSOCK` / `PTY_SERVER` 字样；
+  固件里 stratovirt 的设备串为 `ohos-vhost-vsock-device,guest-cid=1234,id=developer-vsock`）
+
+SDK 不提供头文件，以下 C ABI 与结构是从二进制恢复的
+（`libfusion_pty_ndk.so` 反编译 + 实测）：
+
+```c
+int  OhGetPtyManager(void **outManager);              // 注意：带出参，不是返回值
+int  OhPtyManagerOpenPtySession(void *mgr, void **outSession,
+                                OhPtyCallback *cb, OhPtyConfig *cfg, int *outSessionId);
+int  OhPtySessionSendData(void *session, const char *data);   // 需以 \0 结尾
+int  OhPtySessionSetWinSize(void *session, OhPtyWinSize *ws);
+int  OhPtySessionGetSessionId(void *session, int *id);
+int  OhPtySessionClose(void *session);
+int  OhPtyManagerInstallImage(void *mgr);
+int  OhPtyManagerEnableShareFolder(void *mgr);
+int  OhPtyManagerGetSharedFolderToggleState(void *mgr, bool *enabled);
+```
+
+结构布局（由 `OhPtyManager::GetInnerConfig` 反推）：
+
+```c
+typedef struct {                    // 大小 64
+    const char *f0;                 // → 内层第 1 个 string（默认 "/bin/bash"）shell 路径
+    const char *f1;                 // → 内层第 2 个 string（语义未知）
+    const char *f2;                 // → 内层第 3 个 string
+    const char *f3;                 // → 内层第 4 个 string
+    const char *f4;                 // → 内层第 5 个 string（默认 "openEuler"）
+    const char *f5;                 // → 内层第 6 个 string（默认 "root"）登录用户
+    uint32_t rows, cols, xpixel, ypixel;   // → PtyWinSize（Parcel 里也是这 4 个 uint32）
+} OhPtyConfig;
+
+typedef struct { void *onRecv; void *onSignal; void *onStatus; } OhPtyCallback;
+```
+
+回调签名（由 `InnerPtySessionCallback::On*` 的转发代码确认，**均无长度参数**）：
+
+```c
+void onRecv  (void *session, int sessionId, const char *data);  // data 为 C 字符串
+void onSignal(void *session, int sessionId, int signal);
+void onStatus(void *session, int sessionId, int status);        // 1=就绪 2=会话结束
+```
+
+两个实测踩坑：
+
+1. `OhGetPtyManager` 是**带出参**的（`int OhGetPtyManager(void**)`）。
+   当成无参返回值调用会立刻段错误。
+2. 库内部虽然打了 `exitCode` 日志，但**不会把它转发给用户回调**，
+   所以远端 `exit N` 拿不到 N，只能知道"会话已结束"。
+   同理，用 `echo MARKER$?` 探测结束时要让标记在 shell 侧拼出来
+   （如 `M=__X; echo ${M}_START; cmd; echo ${M}__$?`），
+   否则命令回显里就会出现同样的字面量，导致误判"命令已结束"。
+

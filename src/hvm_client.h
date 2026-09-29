@@ -106,6 +106,16 @@ class Client {
     int expandCapacity(const std::string &vm, int sizeGb);
     int deleteLinuxDataImage();
 
+    // ------------------------------------------------------------ 虚拟机信息
+    //: 出参为 (虚拟机 DDR 大小 MB, 虚拟机进程 PID)
+    int getVmInfo(uint32_t &ddrSizeMb, uint32_t &vmPid);
+    //: stratoVirt 占用内存（MB）
+    int stratovirtMem(int &memMb);
+    //: 关机流程使用的活动状态
+    int activeVmStatusForShutdown(int &out);
+    //: 宿主 SN
+    int hostSn(std::string &out);
+
     // ------------------------------------------------------------ 显示 / 内存
     int modifyResolution(uint32_t width, uint32_t height, bool fullScreen);
     int touchVmMem(uint32_t size);
