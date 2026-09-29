@@ -115,6 +115,8 @@ void usage() {
         "  vm ctor   [选项]        仅构造 CfgInfo 并打印（验证用，不调服务）\n"
         "  vm create --name N --image P [选项] [--apply]\n"
         "  vm start  --name N [选项] [--apply]\n"
+        "  vm view-state <0|1|2>              上报 HapViewState（应用用它告知视图状态）\n"
+        "  vm displays <id[,id...]>           把显示器 id 列表交给服务端\n"
         "  vm serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
         "  vm serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
         "  vm range                查询可用的 CPU / 内存范围（服务端校验依据）\n"
@@ -385,6 +387,39 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (!bios.empty()) cfg.setBiosPath(bios);
     if (!enhance.empty()) cfg.setEnhanceFilePath(enhance);
     cfg.setStartType(startType);
+
+    if (act == "view-state") {
+        // 上报 HapViewState（应用用它告诉服务端视图状态）。取值实测见服务端分支：
+        // 0/1/2 三种分支，语义未完全确定，先按 0..2 试。
+        int st = 1;
+        if (!image.empty()) st = atoi(image.c_str());
+        int rc = c.progressDiedState(st);
+        if (rc != 0)
+            return fail("vm view-state", rc,
+                        std::string("ProgressDiedStateToVm 返回: ") + ohos_vm_error_name(rc));
+        printf("已上报 viewState=%d\n", st);
+        return 0;
+    }
+
+    if (act == "displays") {
+        // 交给服务端的显示器 id 列表；用法: vm displays <id>[,<id>...]
+        std::vector<uint64_t> ids;
+        std::string list = image.empty() ? "0" : image;
+        for (std::size_t i = 0; i <= list.size();) {
+            std::size_t j = list.find(',', i);
+            if (j == std::string::npos) j = list.size();
+            if (j > i) ids.push_back(strtoull(list.substr(i, j - i).c_str(), nullptr, 10));
+            i = j + 1;
+        }
+        int rc = c.displaysNumber(ids);
+        if (rc != 0)
+            return fail("vm displays", rc,
+                        std::string("DisplaysNumber 返回: ") + ohos_vm_error_name(rc));
+        printf("已上报 %zu 个显示 id:", ids.size());
+        for (auto v : ids) printf(" %llu", static_cast<unsigned long long>(v));
+        printf("\n");
+        return 0;
+    }
 
     if (act == "serial-read" || act == "serial-write") {
         // 主机↔客户机通道（virtio-serial）。默认通道名取自虚拟机命令行里的

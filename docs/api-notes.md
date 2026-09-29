@@ -358,28 +358,10 @@ CheckWinImgPath(175)     Windows 安装镜像判定
    否则 `create vm fail, enhance file path is null`。
 3. 磁盘不用自己造：框架按 `diskSize` 生成 `.../img/vm.qcow2`（稀疏，随写增长）。
 
-### 安装介质问题的正解：媒体库视图路径（实测）
+### 安装介质与客户机通道
 
-之前测出的"stratovirt 读不了 ISO"结论**只在两种路径写法下成立**。正确写法是
-**媒体库视图**：
-
-```
-/storage/media/100/local/files/Docs/Download/<bundle>/<file>.iso
-```
-
-- 抓取方式：观察一个**正在安装 Windows 的第三方应用虚拟机**（com.sanway.ecoengine）
-  的 `stratovirt` 命令行 —— 它的安装盘与 unattend 盘都是这个形式；
-- 换成该形式后：`IsValidPath` / `DetectIsoType` / `CheckFiles` 全部通过，
-  `CreateVm` 返回 0，启动后 stratovirt 命令行里两张光盘都挂上了，
-  `vmlog` 里 `Permission denied` 计数为 0；
-- `hvm-cli` 已内置转换：用户视图 `/storage/Users/currentUser/<p>` 与
-  `file://docs/storage/Users/currentUser/<p>` → `/storage/media/100/local/files/Docs/<p>`
-  （`HVM_USER_ID` 可覆盖 userId，默认 100）。
-
-另外：客户机串口不是走日志，而是 **virtio-serial unix socket**（在服务数据区）：
-`.../vm_manager/<hash>/<vm>/uds/serial0.sock`、`serial1.sock`；
-客户端可以通过 `SendDataToVm` / `RecvDataFromVm` + `ChannelInfo` 收发
-（服务端有 `ChannelInfo::Marshalling/Unmarshalling` 与 `GetSerialChannels`）。
+- 安装介质路径：见第 10 节（必须写成**媒体库视图**，`hvm-cli` 会自动转换）；
+- 客户机串口/通道：见第 12 节。
 
 ### 仍未完成
 
@@ -387,12 +369,37 @@ CheckWinImgPath(175)     Windows 安装镜像判定
 - `DeviceInfo`（0x260）内部字段尚未逐个还原（各 `Unwrap*Device` 函数在 [N] 中）；
 - 事件回调（`RegisterVmStatusCallback` 等）。
 
-## 10. 安装介质为什么挂不上（沙箱三层锁，实测）
+## 10. 安装介质路径：三种写法与正解（实测）
 
-给虚拟机挂安装光盘（`--image X.iso`）时，服务端会把该路径交给 `stratovirt` 打开。
-实测发现**能读这个文件的进程，和能写文件的位置，被三层隔离拆开了**：
+给虚拟机挂安装盘（`--image X.iso`）时，服务端会把该路径交给 `stratovirt` 打开。
+实测**只有"媒体库视图"这一种写法同时满足两个进程的可读性**：
 
-### 10.1 SELinux 域隔离（主因）
+| 写法 | `ohos_vm_manager`（校验阶段） | `ohsw_stratovirt`（真正打开光盘） |
+|---|---|---|
+| `/storage/Users/currentUser/Download/x.iso` | ✗ 它的命名空间里没有这个挂载 | — |
+| `/data/service/el2/100/hmdfs/account/files/Docs/Download/x.iso`（hmdfs 真实路径） | ✓ | ✗ `Permission denied` |
+| **`/storage/media/100/local/files/Docs/Download/x.iso`（媒体库视图）** | ✓ | **✓** |
+
+### 10.1 正解：媒体库视图
+
+- 发现方式：抓一个**正在安装 Windows 的第三方应用虚拟机**（`com.sanway.ecoengine`）
+  的 `stratovirt` 完整命令行，它的两张光盘都是这个形式：
+
+  ```
+  if=none,id=disk,format=raw,media=cdrom,file=/storage/media/100/local/files/Docs/Download/<bundle>/Win11_....iso
+  if=none,id=unattend,format=raw,media=cdrom,readonly=true,file=/storage/media/100/local/files/Docs/Download/<bundle>/server.iso
+  ```
+
+- 换成该写法后：`IsValidPath` / `DetectIsoType` / `CheckFiles` 全部通过、`CreateVm` 返回 0、
+  启动后两张光盘都出现在 stratovirt 命令行里、`vmlog` 里 `Permission denied` 计数为 0；
+- 服务端库里本来就有对应白名单正则：`^/storage/media/\d+/local/files/Docs/`；
+- `hvm-cli` 已内置转换：`/storage/Users/currentUser/<p>` 与
+  `file://docs/storage/Users/currentUser/<p>` → `/storage/media/100/local/files/Docs/<p>`
+  （环境变量 `HVM_USER_ID` 可覆盖 userId，默认 100）。
+
+### 10.2 为什么另外两种写法不行
+
+**SELinux 域隔离**（针对 hmdfs 真实路径）：
 
 ```
 (typetransition ohos_vm_manager ohsw_stratovirt_exec process ohsw_stratovirt)
@@ -400,49 +407,164 @@ CheckWinImgPath(175)     Windows 安装镜像判定
 
 | 阶段 | 域 | 结果 |
 |---|---|---|
-| `IsValidPath` / `DetectIsoType` / `CheckFiles` | `ohos_vm_manager` | 能读 hmdfs（用户存储）✓ |
-| `stratovirt` 真正打开文件当光盘 | `ohsw_stratovirt` | hmdfs 一律 `Permission denied` ✗ |
+| `IsValidPath` / `DetectIsoType` / `CheckFiles` | `ohos_vm_manager` | 能读 hmdfs ✓ |
+| `stratovirt` 打开光盘文件 | `ohsw_stratovirt` | hmdfs 一律 `Permission denied` ✗ |
 
-实测各种位置的组合（`/storage/Users/...`、`Download/<bundle>/`、
-应用沙箱 `/data/storage/el2/base/files/...`、`/data/local/tmp`、`/dev/shm`）：
-**没有一个位置能被两个域同时读到**。文件标签实测为 `u:object_r:hmdfs:s0`。
+**挂载命名空间隔离**（针对 `/storage/Users/...`）：服务进程看不到该挂载，
+`realpath()` 直接失败（日志 `IsValidPath:81 Standardized path fail!`）。
+实测应用沙箱 `/data/storage/el2/base/files/...`、`/data/local/tmp`、`/dev/shm`
+也都过不了 `IsValidPath`。
 
-### 10.2 挂载命名空间隔离
-
-服务进程有独立的挂载命名空间：root（`sudo`）看到的
-`/data/service/el0/virt_service/100/vm_manager` 是**空 tmpfs**，
-而服务自己的视图里有 `<hash>/<vm>/img/vm.qcow2`。
-`/proc/<vm_manager pid>/root/...` 被 SELinux 拒绝（sudo 域不能 ptrace 其它域）。
-
-### 10.3 受限的 sudo 域
+### 10.3 记录备查：受限的 sudo 域
 
 `sudo` 得到的是 `u:r:sudo_execv_label:s0`：读不了别的域的 `/proc/<pid>/status`、
-读不了 `dmesg`（拿不到 AVC）、连 `/data/log/hwf_service` 都进不去。
-`su hwf_service` 不存在，`chcon` 是 toybox 版不支持 `--reference`，
-且 hmdfs 上 `chmod` 报告成功但权限不变。**改标签/进命名空间这两条路都断了。**
+读不了 `dmesg`（拿不到 AVC）、连 `/data/log/hwf_service` 都进不去；
+`su hwf_service` 不存在，toybox 版 `chcon` 不支持 `--reference`，
+且 hmdfs 上 `chmod` 报告成功但权限不变 —— 所以"改标签 / 进服务命名空间"两条路都断了。
+**正解不需要 root。**
 
-### 10.4 唯一剩下的通道
+## 11. MigrationOptions 与 ImportVmDiskImage（磁盘迁移通道，非通用搬运）
 
-`ImportVmDiskImage(vm, src, dst, sptr<MigrationOptions>)` 内部是
-`VmAssistantManager::CopyFile(...)` —— **由服务进程自己拷文件**，
-落点若在服务数据区，标签天然正确。实测调用到服务端返回：
+### 11.1 类布局与构造配方（[N] = libvmmanager_napi.z.so）
+
+取自 [N] `WindowsFusionNapi::OnImportVmDiskImage` 的内联构造现场（反汇编 0x989E4~0x98A3C）：
+
+```c
+p = operator new(0x40); memset(p, 0, 0x40)
+RefBase::RefBase(p + 48)
+Parcelable::Parcelable(p, baseN + 0xB0698)      // 第 2 参数是 VTT
+*(void**)(p + 0)  = baseN + 0xB4790             // 主 vtable 地址点
+*(void**)(p + 48) = baseN + 0xB47F0             // = 主 vtable + 96
+RefBase::IncStrongRef(p + 48, &holder)
+```
+
+字段（取自 [N] `UnwrapMigrationOptions`）：
+
+| 偏移 | 类型 | 名称 |
+|---|---|---|
+| +10 | bool | `isKeepSnapshots` |
+| +11 | bool | `hasCallback` |
+| +16 | `std::string` | `password`（24 字节，+16..+39） |
+| +40 | bool | `isForceImport` |
+
+已实现：`src/cfginfo.{h,cpp}` 的 `MigrationOptionsBuilder`、`hvm-cli vm import` / `vm export`。
+
+### 11.2 服务端三道闸门（实测，逐步放行）
 
 ```
-[(HandleImportVmDiskImage:1086)]MigrationOptions is nullptr.
+1) [(HandleImportVmDiskImage:1086)]       MigrationOptions is nullptr.            → 传入构造好的对象后消失
+2) [(CheckVmStateForMigration:1933)]      the state of virtual machine not stopped → 停机后通过
+3) [(CheckBeforeImportVmDisk:1973)]       src disk img was broken                  → 过不去
 ```
 
-即需要构造私有类 `MigrationOptions`（与 `CfgInfo` 同类问题，
-两个库里都没有导出其构造函数），这是继续推进的前置条件。
+第 3 条的根因（关键）：`VmmCommonUtils::GetGuestType` **并不解析 qcow2**，而是
 
-### 10.5 画面
+```c
+key = <hwf.* 前缀> + 磁盘路径;
+SettingProvider::GetIntValue(instance, key, &type);   // 从系统设置库查"客户机类型"
+```
 
-VM 的显示是 `-display ohui,...socks-path=/data/service/el2/100/virt_service/hwf_service/<hash>/<vm>/uds`
-（华为私有后端），消费方是 HWF UI 应用；而**固件里只有 napi 库、没有该 UI 应用**，
-设备上也没安装（`bm dump` 里只有 `app.hackeris.winehua` 与 `com.oseasy1.ohvm`）。
-客户端 kit 的 121 个方法里**没有任何截屏接口**；
-QMP socket（可 `screendump` + `input-send-event`）只有 hwf_service 域能进。
+只有服务端自己创建的磁盘才有这条记录 → 用户区的文件必然判 broken；
+该检查还带 `IsLegalUosCalling` 分支（UOS 迁移场景）。
+`VmAssistantManager::CopyFile` 的调用者**只有** `ImportVmDiskImage` / `ExportVmDiskImage`
+（xref 确认），因此服务端**不存在**"用户区 → 服务区"的通用文件搬运通道。
 
-> 串口：`-serial redirect-to-log` 写进 `/data/log/hwf_service/vmlog`
-> （该目录属组是 `log`，本工具进程在 `log` 组内，**可以读**）。
-> 但实测该文件里目前只有 stratoVirt 自身日志，没有客户机串口输出
-> —— 客户机没引导起来时不会有输出，能否拿到取决于固件的串口配置。
+实测：标准 `qemu-img` 空白 qcow2（v3、100 GB 虚拟大小、198 KB 稀疏）与 ISO 都报同样错误。
+
+## 12. 主机 ↔ 客户机通道（ChannelInfo / SendDataToVm / RecvDataFromVm）
+
+### 12.1 ChannelInfo 布局（取自 [S] `ChannelInfo::Unmarshalling` / `Marshalling`）
+
+```c
+p = operator new(0x38); memset(p, 0, 0x38)
+RefBase::RefBase(p + 40)          // 注意在 +40（不是 +48）
+*(void**)p = baseN + 0xB4910      // 主 vtable 地址点（不需要 VTT）
+*(uint32*)(p + 12) = 通道类型
+new (p + 16) std::string(通道名)
+```
+
+通道类型取自 [N] `VmManagerChannelTypeInit`（JS 枚举 `ChannelType`）：`SERIAL = 0`；
+napi 侧属性名为 `channelName` / `channelInfo`。
+
+### 12.2 两个接口的实测要点
+
+- `RecvDataFromVm(vm, vector<uint8_t>&, int, ChannelInfo)` **必须预先给足缓冲区**，
+  否则服务端报 `RecvDataFromVm:1048 data size invalid.`（402）；预分配后进入正常读取路径；
+- 第三个 `int` 参数与缓冲区大小相关（实测传 4096 有效）；
+- 已实现：`ChannelInfoBuilder`、`Client::sendDataToVm` / `recvDataFromVm`、
+  `hvm-cli vm serial-read` / `vm serial-write`（`--chan/--type/--arg/--data`）。
+
+### 12.3 客户机的两条"串口"
+
+| 通道 | 形态 | 说明 |
+|---|---|---|
+| 传统串口 | `-serial redirect-to-log` → `/data/log/hwf_service/vmlog` | **只读** ✓（该目录属组 `log`，本工具在组内）。GRUB 菜单与客户机控制台文本都会出现在这里（被包在 `chardev.rs` 的日志行里）——这是**能看到客户机文本界面**的唯一途径 |
+| virtio-serial | `virtserialport id=winbox_serial0/1 nr=1/2` → 服务数据区 `uds/serial0.sock` / `serial1.sock` | **双向** ✓，走上面两个 API；实测读报 `RecvDataFromVm:1079 recv data failed` —— 该端口是 HWF 的 Windows 客户机代理通道，Linux 安装器不会打开它 |
+
+`-serial redirect-to-log` 是**单向**的（没有输入路径），kit 里也没有键盘注入接口
+（`usb-kbd` / `usb-tablet` / `virtio-multitouch` 都由被沙箱挡住的 `-display ohui` / QMP 驱动），
+因此**无法向 GRUB 菜单或安装器发送按键**。
+
+## 13. 能力边界：白名单 / 窗口 / 显示（为什么"画面 + 键鼠"绕不过去）
+
+三层门叠在一起，这是本仓库探索到的最终边界。
+
+### 13.1 调用者白名单（vm_manager 侧）
+
+`VmmCommonUtils::CheckCallerIdentity` → `IsLegalCalling()`，按 **appIdentifier** 判定
+（`IsLegalAppIdentifier` / `IsLegal2BAppIdentifier` / `IsLegal2BCalling` / `IsLegal2CCalling`，
+2B = 厂商合作应用）。实测：
+
+- 本仓库的 CLI **能过** —— 它跑在 **HiShell 的 uid** 下（终端里的子进程继承该身份）；
+- `com.oseasy1.ohvm`、`com.sanway.ecoengine` 能过（厂商合作应用，凭签名身份）；
+- **自己写的 HAP 过不了**（appIdentifier 不在名单里，签名无法伪造）。
+
+### 13.2 系统窗口只能由 UIAbility 创建
+
+```cpp
+// libwm.z.so 导出
+Window::Create(sptr<WindowOption>&, shared_ptr<AbilityRuntime::Context> const&,
+               sptr<IRemoteObject> const&, WMError&, string const&, bool)
+```
+
+`AbilityRuntime::Context` 只有被 AAFwk 拉起的 UIAbility 才有。NDK 侧
+（`native_window/external_window.h`）只有"**从已有 surfaceId 包装**"的接口：
+
+```c
+OH_NativeWindow_CreateNativeWindowFromSurfaceId(uint64_t surfaceId, OHNativeWindow** out);
+```
+
+即"先有窗口才有 surface，反过来不行"；`oh_window.h` 里没有任何创建接口。
+→ **裸 ELF 拿不到窗口令牌，创建不了系统窗口。**
+
+### 13.3 虚拟机画面是"合成进应用窗口"的
+
+VM 的显示后端是私有 `-display ohui,iothread=...,socks-path=<服务数据区>/uds`。
+用户四指右滑进全屏时，`vmlog` 里能看到完整证据链：
+
+```
+ui/src/ohui_srv/msg_handle.rs:732   WindowInfoExtensionEvent { surface_width: 3120, surface_height: 2080, rotation: 0 }
+ui/src/ohui_srv/msg_handle.rs:463   received focus-in event
+devices/src/display/svga/processor_dx/svga_dx_backend.rs:444   Swipe in, flush last frame to enable dss composition.
+ui/src/ohui_srv/msg_handle.rs:466   received focus-out event
+```
+
+即：系统合成器（DSS）把 OHUI 的帧合成进**应用窗口**，窗口全屏由系统手势管理
+（所以关掉 HAP 之后仍然可用）。**没有窗口就没有可滑进去的表面** —— 这正是我们自己
+启动的虚拟机四指右滑无效的原因。kit 的 121 个方法里也没有截屏接口；QMP socket
+（`screendump` / `input-send-event`）只有 hwf_service 域能进。
+
+### 13.4 顺带结论：各家应用的虚拟机互相隔离
+
+- 活动虚拟机名是全局的（能看到 `com.oseasy1.ohvm`）；
+- 但**别的应用创建的虚拟机**对我们等于不存在：`disk path` 为空、`disk size` 为 0、
+  `net ip` 返回 405、`snapshot list` 报 `the qcow2 does not exist`；
+  服务端 `CheckMultipleVmState` 里确实用 `GetAppIdByCallingUid` + MD5 计算调用方身份；
+- 多台虚拟机**可以并存**（实测同时存在三台），但**同时只能有一台在运行**。
+
+### 13.5 因此可行的用法只有两种
+
+| 目标 | 做法 |
+|---|---|
+| 交互式装系统 / 看画面 | 只能借**厂商合作应用的界面**（OSEasy / Sanway）：用它们的 UI 新建一台虚拟机、镜像选下载目录里的 ISO |
+| 自动化控制**自己的**虚拟机 | 用本仓库的 `hvm-cli`（借 HiShell 身份过白名单）：create / start / stop / 磁盘 / 快照 / 网络端口转发 / 共享目录 / 通道读写 |

@@ -346,6 +346,29 @@ int Client::recvDataFromVm(const std::string &vm, std::vector<uint8_t> &data, in
     }
 }
 
+int Client::progressDiedState(int viewState) {
+    using Fn = int (*)(void *, const int32_t *);
+    auto f = resolve<Fn>("ProgressDiedStateToVm");
+    if (f == nullptr) return kErrNoSymbol;
+    int32_t state = viewState;
+    try {
+        return f(instance_, &state);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::displaysNumber(const std::vector<uint64_t> &displayIds) {
+    using Fn = int (*)(void *, const std::vector<uint64_t> &);
+    auto f = resolve<Fn>("DisplaysNumber");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, displayIds);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
 int Client::stopVm(const std::string &name, bool clean) {
     using Fn = int (*)(void *, const std::string &, bool);
     auto f = resolve<Fn>("StopVm");

@@ -104,6 +104,12 @@ class Client {
     //: 从客户机通道读数据
     int recvDataFromVm(const std::string &vm, std::vector<uint8_t> &data, int arg,
                        const void *ch);
+    //: 上报 HAP 视图状态（HapViewState 就是一个 int32）。
+    //: 应用用它告诉服务端"我的窗口还在/已销毁"，实测服务端 ProgressDiedFn 按此值分支。
+    int progressDiedState(int viewState);
+    //: 把显示器 id 列表交给服务端（napi 侧会先向 Rosen::DisplayManager 查当前显示 id）。
+    //: 猜测用于把"虚拟机画面挂在哪个显示上"告诉服务端。
+    int displaysNumber(const std::vector<uint64_t> &displayIds);
     int stopVm(const std::string &name, bool clean);
 
     // ------------------------------------------------------------ 电源

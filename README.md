@@ -143,6 +143,25 @@ $ ./hvm-cli --vm win11 disk path
 > 用户存储（hmdfs）、应用沙箱、`/data/local/tmp`、`/dev/shm` 全部 `Permission denied`。
 > 详见 `docs/api-notes.md` 第 10 节。
 
+## 能力边界
+
+完整的证据与推导见 [`docs/api-notes.md` 第 13 节](docs/api-notes.md)。一句话版本：
+
+| 想要的能力 | 结论 |
+|---|---|
+| 在 HiShell 终端里调 vm_manager（借 HiShell 身份过白名单） | ✅ 可以 |
+| 创建/启动/停机/销毁**我们自己**的虚拟机 | ✅ 可以 |
+| 给自己的虚拟机挂安装盘（ISO 放在下载目录） | ✅ 可以（路径会自动转成媒体库视图） |
+| 查询/管理**别的应用**的虚拟机（如 OSEasy 那台） | ❌ 服务端按应用隔离，只能看到名字 |
+| 看到自己虚拟机的**画面**、给它**发按键** | ❌ 画面要合成进"应用窗口"，而窗口只有 UIAbility 能创建 |
+| 自己写 HAP 绕过上面两条 | ❌ appIdentifier 不在白名单 |
+| 让系统四指右滑进自己虚拟机的全屏 | ❌ 同上（系统合成的对象是应用窗口） |
+| 读客户机的**文本**控制台（GRUB、安装器输出） | ✅ 可以（`-serial redirect-to-log` → `/data/log/hwf_service/vmlog`，我们可读） |
+| 多台虚拟机并存 / 同时只运行一台 | ✅ / ⛔ 服务端限制 |
+
+> 因此"交互式装系统 + 看画面"只能用**厂商合作应用的界面**（OSEasy / Sanway）；
+> 本仓库负责**自动化控制我们自己的虚拟机**。
+
 ## 权限模型
 
 `vm_manager` 对每个请求做调用者校验（`VmmCommonUtils::CheckCallerIdentity`），
@@ -192,10 +211,13 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 ## 实现状态
 
 - [x] `hvm-cli`：状态/能力/电源/快照/共享目录/网络/磁盘/显示/内存
+- [x] `hvm-cli`：**创建 / 启动 / 销毁虚拟机**（`CfgInfo` 手工构造，实测 `CreateVm` 返回 0）
+- [x] `hvm-cli`：安装盘挂载（自动转成媒体库视图路径，实测两张光盘都挂上）
+- [x] `hvm-cli`：主机 ↔ 客户机通道（`ChannelInfo` + `Send/RecvDataFromVm`）
 - [x] `openeuler`：`exec` / `shell` / 共享目录 / 镜像安装
-- [ ] `hvm-cli`：启动/创建虚拟机（`StartVm`/`CreateVm` 需要 `CfgInfo`，逆向中）
-- [ ] `hvm-cli`：自建虚拟机的 `exec`/`shell`（走串口或 vsock，待定）
-- [ ] 事件回调（`RegisterVmStatusCallback` 等）
+- [ ] `DeviceInfo`(0x260) 内部字段逐个还原（各 `Unwrap*Device`）
+- [ ] 事件回调（`RegisterVmStatusCallback` / `IVmEventListener` 等）
+- [ ] 自建虚拟机的画面与键鼠 —— **架构上不可达**，见[能力边界](#能力边界)
 
 ## 说明
 
