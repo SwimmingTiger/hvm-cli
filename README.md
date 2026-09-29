@@ -108,6 +108,10 @@ CreateVm 返回 rc=0 (OK)
 - `--enhance` 是**扩展盘（enhance ISO）**，**创建时必填**且必须是 `.iso` 文件
   （服务端校验：`enhanceFilePath` 不能为空，否则 `create vm fail, enhance file path is null`）。
   它对应客户机里的 `unattend` 槽位；
+- 创建成功后会**自动登记**到本地清单
+  `/data/storage/el2/base/preferences/hvm-cli-vms.list`（一行一个名字），
+  销毁时自动移除 —— 因为服务端**没有枚举接口**（见[能力边界](#能力边界)），
+  这份清单是 `hvm-cli list` 枚举的依据 ✓；
 - **磁盘不用自己准备**：框架按 `--disk-gb` 生成稀疏的
   `/data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2`。
 
@@ -216,6 +220,7 @@ $ ./hvm-cli vm destroy myvm
 ### 7. 日常查看
 
 ```console
+$ ./hvm-cli list                         # 枚举我们创建过的虚拟机（读本地清单）
 $ ./hvm-cli vms                          # 已知虚拟机一览
 $ ./hvm-cli active-name                  # 当前活动虚拟机
 $ ./hvm-cli vm-status myvm               # 状态码（0=未运行 9=运行中）

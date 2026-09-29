@@ -619,6 +619,21 @@ ui/src/ohui_srv/msg_handle.rs:466   received focus-out event
   服务端 `CheckMultipleVmState` 里确实用 `GetAppIdByCallingUid` + MD5 计算调用方身份；
 - 多台虚拟机**可以并存**（实测同时存在三台），但**同时只能有一台在运行**。
 
+### 13.4.1 客户端自己维护虚拟机清单（本仓库的做法）
+
+因为服务端没有枚举接口、也看不到服务进程命名空间里的虚拟机目录（§10.2），
+`hvm-cli` 自己记一份清单：
+
+```
+/data/storage/el2/base/preferences/hvm-cli-vms.list      # 一行一个虚拟机名（排序去重）
+```
+
+- `vm create` 成功 → 追加；`vm destroy` 成功 → 移除（写临时文件再 rename，失败只提示不影响主操作）；
+- `hvm-cli list` = 读这份清单后用 `GetVmStatus` / `GetVmDiskImagePath` 逐台探测并打印表格；
+- 这样"忘了虚拟机名"就不再是死局 —— 名字在我们自己的清单里 ✓
+  （备选恢复途径：`strings /data/log/hwf_service/vmlog*` 能从虚拟机路径里反推出名字，
+  实测能找回已销毁的虚拟机名）。
+
 ### 13.5 因此可行的用法只有两种
 
 | 目标 | 做法 |

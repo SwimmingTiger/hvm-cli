@@ -6,6 +6,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <unistd.h>   // getuid：用 uid/200000 推导 OS 账号 id
+#include <algorithm>   // sort/unique/remove/find（本地虚拟机清单）
+#include <fstream>     // 清单文件读写
+
 #include <cstring>
 #include <string>
 #include <vector>
@@ -110,7 +113,8 @@ void usage() {
         "状态:\n"
         "  selftest                客户端 kit 加载自检\n"
         "  info                    汇总状态（能力/活动 VM/版本/共享目录）\n"
-        "  vms [名字...]           列出/探测虚拟机（无枚举接口，按名字探测）\n"
+        "  list                    枚举我们自己记录的虚拟机清单（见 preferences 下的清单文件）\n"
+        "  vms [名字...]           按已知名字探测虚拟机（服务端无枚举接口）\n"
         "\n"
         "虚拟机生命周期（CfgInfo 为逆向手工构造，见 docs/api-notes.md）：\n"
         "  vm ctor   [选项]        仅构造 CfgInfo 并打印（验证用，不调服务）\n"
@@ -555,6 +559,94 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
     return 2;
 }
 
+// ------------------------------------------------------- 本地虚拟机清单（自管理）
+//: vm_manager 没有枚举接口（见 docs/api-notes.md §13），所以由我们自己记一份清单：
+//:     /data/storage/el2/base/preferences/hvm-cli-vms.list     （一行一个虚拟机名）
+//: 维护点：`vm create` 成功后追加、`vm destroy` 成功后移除；`hvm-cli list` 用它来枚举。
+constexpr const char *kRegistryPath =
+    "/data/storage/el2/base/preferences/hvm-cli-vms.list";
+
+std::vector<std::string> registryLoad() {
+    std::vector<std::string> names;
+    std::ifstream in(kRegistryPath);
+    std::string line;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (!line.empty()) names.push_back(line);
+    }
+    return names;
+}
+
+bool registrySave(std::vector<std::string> names) {
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    const std::string tmp = std::string(kRegistryPath) + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        if (!out) return false;
+        for (const auto &n : names) out << n << "\n";
+        if (!out) return false;
+    }
+    return std::rename(tmp.c_str(), kRegistryPath) == 0;
+}
+
+//: 返回 false 表示清单没写成功（调用方只提示、不影响主操作）
+bool registryAdd(const std::string &name) {
+    auto names = registryLoad();
+    if (std::find(names.begin(), names.end(), name) != names.end()) return true;
+    names.push_back(name);
+    return registrySave(std::move(names));
+}
+
+bool registryRemove(const std::string &name) {
+    auto names = registryLoad();
+    auto it = std::remove(names.begin(), names.end(), name);
+    if (it == names.end()) return true;   // 本来就不在
+    names.erase(it, names.end());
+    return registrySave(std::move(names));
+}
+
+//: 打印虚拟机表格（`vms` 与 `list` 共用）
+int printVmTable(Client &c, const std::string &cmd,
+                 const std::vector<std::string> &names) {
+    std::string active;
+    c.activeVmName(active);
+    if (g_json) {
+        std::string arr = "[";
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            int st = 0;
+            int rc = c.vmStatus(names[i], st);
+            std::string path;
+            c.diskImagePath(names[i], path);
+            if (i) arr += ",";
+            arr += "{\"name\":\"" + jsonEscape(names[i]) +
+                   "\",\"rc\":" + std::to_string(rc) +
+                   ",\"status\":" + std::to_string(st) +
+                   ",\"active\":" + ((names[i] == active) ? "true" : "false") +
+                   ",\"diskImage\":\"" + jsonEscape(path) + "\"}";
+        }
+        arr += "]";
+        Json j(cmd);
+        j.str("activeVm", active).raw("vms", arr);
+        printf("%s\n", j.ok().c_str());
+        return 0;
+    }
+    printf("活动虚拟机: %s\n", active.empty() ? "(无)" : active.c_str());
+    printf("%s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
+           padTo("活动", 8).c_str(), "磁盘镜像");
+    for (const auto &n : names) {
+        int st = 0;
+        c.vmStatus(n, st);
+        std::string path;
+        c.diskImagePath(n, path);
+        printf("%s %s %s %s\n", padTo(n, 24).c_str(),
+               padTo(std::to_string(st), 8).c_str(),
+               padTo(n == active ? "是" : "否", 8).c_str(),
+               path.empty() ? "(无)" : path.c_str());
+    }
+    return 0;
+}
+
 // ---------------------------------------------------------------- vm 子命令
 //: CfgInfo 是华为私有类型（无公开头文件），这里按逆向配方手工构造。
 int cmdVm(Client &c, const std::vector<std::string> &pos) {
@@ -814,6 +906,9 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
                         std::string("DestroyVm 失败: ") + ohos_vm_error_name(rc));
         if (g_json) { Json j("vm destroy"); j.str("name", name); printf("%s\n", j.ok().c_str()); }
         else printf("已销毁 %s\n", name.c_str());
+        // 自己维护清单：从记录里移除（失败只提示，不影响销毁结果）
+        if (!registryRemove(name))
+            fprintf(stderr, "提示: 虚拟机已销毁，但清单更新失败（%s）\n", kRegistryPath);
         return 0;
     }
 
@@ -836,6 +931,11 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         } else {
             printf("%s 返回 rc=%d (%s)\n", act == "create" ? "CreateVm" : "StartVm", rc,
                    ohos_vm_error_name(rc));
+        }
+        if (act == "create") {
+            // 自己维护清单：服务端没有枚举接口，见文件头说明
+            if (!registryAdd(name))
+                fprintf(stderr, "提示: 虚拟机已创建，但清单写入失败（%s）\n", kRegistryPath);
         }
         return 0;
     }
@@ -890,48 +990,34 @@ int run(int argc, char **argv) {
     }
 
     if (cmd == "vms") {
-        // vm_manager 没有提供枚举接口：以 GetActiveVmName 为准，
-        // 再对已知/指定的名字逐个探测状态与磁盘镜像。
         std::vector<std::string> names =
             a.pos.empty() ? std::vector<std::string>{a.vm} : a.pos;
-        std::string active;
-        c.activeVmName(active);
-        if (g_json) {
-            std::string arr = "[";
-            for (size_t i = 0; i < names.size(); ++i) {
-                int st = 0;
-                int rc = c.vmStatus(names[i], st);
-                std::string path;
-                c.diskImagePath(names[i], path);
-                if (i) arr += ",";
-                arr += "{\"name\":\"" + jsonEscape(names[i]) +
-                       "\",\"rc\":" + std::to_string(rc) +
-                       ",\"status\":" + std::to_string(st) +
-                       ",\"active\":" + ((names[i] == active) ? "true" : "false") +
-                       ",\"diskImage\":\"" + jsonEscape(path) + "\"}";
-            }
-            arr += "]";
-            Json j("vms");
-            j.str("activeVm", active).raw("vms", arr);
-            printf("%s\n", j.ok().c_str());
-        } else {
-            printf("%s\n", ("活动虚拟机: " +
-                             std::string(active.empty() ? "(无)" : active)).c_str());
-            printf("%s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
-                   padTo("活动", 8).c_str(), "磁盘镜像");
-            for (const auto &n : names) {
-                int st = 0;
-                c.vmStatus(n, st);
-                std::string path;
-                c.diskImagePath(n, path);
-                printf("%s %s %s %s\n", padTo(n, 24).c_str(),
-                       padTo(std::to_string(st), 8).c_str(),
-                       padTo(n == active ? "是" : "否", 8).c_str(),
-                       path.empty() ? "(无)" : path.c_str());
-            }
+        int rc = printVmTable(c, "vms", names);
+        if (!g_json)
             printf("\n注: vm_manager 未提供枚举接口，此表按已知名字探测得出。\n");
+        return rc;
+    }
+    if (cmd == "list") {
+        // 枚举我们自己记录的虚拟机清单（vm create 时追加、vm destroy 时移除）
+        std::vector<std::string> names = registryLoad();
+        if (names.empty()) {
+            if (g_json) {
+                Json j("list");
+                j.num("count", 0).str("registry", kRegistryPath);
+                printf("%s\n", j.ok().c_str());
+            } else {
+                printf("清单为空（%s）\n", kRegistryPath);
+                printf("新建虚拟机后会自动记录，例如：\n");
+                printf("  ./hvm-cli vm create --name myvm --image <ISO> --enhance <ISO> "
+                       "--bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi "
+                       "--cpu 6 --mem 6 --disk-gb 64\n");
+            }
+            return 0;
         }
-        return 0;
+        int rc = printVmTable(c, "list", names);
+        if (!g_json)
+            printf("\n清单文件: %s（%zu 台）\n", kRegistryPath, names.size());
+        return rc;
     }
     if (cmd == "vm-info") {
         uint32_t ddr = 0, pid = 0;
