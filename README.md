@@ -387,7 +387,3 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 - [ ] `DeviceInfo`(0x260) 内部字段逐个还原（各 `Unwrap*Device`）
 - [ ] 事件回调（`RegisterVmStatusCallback` / `IVmEventListener` 等）
 - [ ] 自建虚拟机的画面与键鼠 —— **架构上不可达**，见[能力边界](#能力边界)
-
-## 说明
-
-仅供在自有设备上做互操作性与自动化研究。
