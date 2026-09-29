@@ -103,7 +103,26 @@ $ ./hvm-cli vm create --name myvm --image /path/to/win.iso \
 | `--mem` | **GB** | 必须在 `GetVmAvailableMemorySizeRange` 区间内（本机 6..18） |
 | `--disk` / `--disk-gb` | MB / GB | 服务端要求 `>= 0x10000`（64 GB）且不超过宿主磁盘 |
 | `--bios` | 路径 | 必须存在且可读（服务端 `access(R_OK)`）；如 `/system/opt/virt_service/virtualized_hwf/stratovirt-vars` |
-| `--image` | 路径 | 必须存在且可读，且**是 ISO 或 qcow2 镜像**（`DetectIsoType`/`GetQcowState`） |
+| `--image` | 路径 | 必须存在且**服务端进程**可读，且是 ISO 镜像（`DetectIsoType`） |
+| `--enhance` | 路径 | 必须存在且可读，扩展名必须是 `.iso`（`CheckEnhanceFilePath`）；缺省会导致 `create vm fail, enhance file path is null` |
+
+#### 路径必须写成服务端视角的真实路径
+
+服务端（hwf_service）`IsValidPath()` 只做 `realpath()`。它处在自己的挂载命名空间里，
+**看不到 `/storage/Users/...`，也读不了应用沙箱与 `/data/local/tmp`（SELinux 标签不允许）**。
+用户可见路径要换算成 hmdfs 真实路径：
+
+```
+用户视图: /storage/Users/currentUser/Download/<app>/<file>.iso
+服务端视图: /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/<file>.iso
+```
+
+磁盘**不需要**自己准备 qcow2 —— 框架会按 `CfgInfo.diskSize` 自行创建：
+
+```
+$ ./hvm-cli --vm win11 disk path
+/data/service/el0/virt_service/100/vm_manager/<hash>/win11/img/vm.qcow2
+```
 
 > 本机未预置任何 VM 镜像（`/data/virt_service` 不存在），所以最后一步会停在
 > `file is not iso.` / `not image` —— 协议层已通，只差提供真实镜像。

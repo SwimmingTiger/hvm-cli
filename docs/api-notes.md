@@ -315,6 +315,49 @@ hvm::CfgInfoBuilder::setCpuNum(int):
 调试动态库时可用 `image list -f -o` 取加载基址，
 再加逆向出的静态偏移下断点（`br set -a <base+offset>`）。
 
+### 一次成功的创建（实测记录）
+
+用下面这条命令完整走通了 `CreateVm`（返回 rc=0）：
+
+```bash
+./hvm-cli vm create --name win11 \
+  --image   /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/Win11_....iso \
+  --enhance /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/oetool.iso \
+  --bios /system/opt/virt_service/virtualized_hwf/stratovirt-vars \
+  --cpu 6 --mem 8 --disk-gb 128 --apply
+```
+
+创建后：
+
+```
+活动虚拟机 : win11
+磁盘镜像   : /data/service/el0/virt_service/100/vm_manager/177c554b/win11/img/vm.qcow2
+状态码     : 9（实测：stratoVirt 进程在跑、vm-info 能取到 PID）
+```
+
+服务端校验链的**完整顺序**（日志逐条对应，便于排错）：
+
+```
+IsValidPath(81)          路径 realpath（服务端命名空间）
+DetectIsoType(144/148)   路径有效 + 必须是 ISO
+CheckFiles(154/159)      存在 + access(R_OK)
+CheckParams(110/124)     memory(GB) / disk(MB, >=0x10000) / cpu
+CheckEnhanceFilePath     enhance 必须非空且扩展名为 .iso
+CheckWinImgPath(175)     Windows 安装镜像判定
+→ 建目录、写设备 JSON、配网、注册回调 → rc=0
+```
+
+**三个坑**（都实测踩过）：
+
+1. 镜像路径必须是**服务端视角**的路径。`/storage/Users/...`、应用沙箱
+   （`/data/storage/el2/base/...`，SELinux 标签不允许）、`/data/local/tmp`
+   （`data_local_tmp` 标签）都会让 `realpath()` 失败并报
+   `Standardized path fail!`；换成 hmdfs 真实路径
+   `/data/service/el2/100/hmdfs/account/files/Docs/...` 立刻通过。
+2. `enhanceFilePath`（CfgInfo+56）**不能为空**且必须是 `.iso` 文件，
+   否则 `create vm fail, enhance file path is null`。
+3. 磁盘不用自己造：框架按 `diskSize` 生成 `.../img/vm.qcow2`（稀疏，随写增长）。
+
 ### 仍未完成
 
 - 提供真实 ISO/qcow2 镜像后即可完成一次完整创建；

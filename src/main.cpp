@@ -417,9 +417,12 @@ int run(int argc, char **argv) {
         return 0;
     }
 
-    Args a = parse(argc, argv, 2);
-    // 允许 `hvm-cli --json info` 这种写法：把选项后的第一条非选项当作命令
-    if (cmd.rfind("--", 0) == 0) {
+    // argv[1] 是选项时要从它本身开始解析（否则会吞掉它的取值，例如 --vm 的名字）
+    const bool firstIsOpt = cmd.rfind("--", 0) == 0;
+    Args a = parse(argc, argv, firstIsOpt ? 1 : 2);
+    // 允许 `hvm-cli --json info` / `hvm-cli --vm win11 net ip` 这种写法：
+    // 把选项后的第一条非选项当作命令
+    if (firstIsOpt) {
         g_json = g_json || cmd == "--json";
         if (a.pos.empty()) {
             usage();
