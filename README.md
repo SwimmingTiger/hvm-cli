@@ -82,7 +82,7 @@ $ ./openeuler image install    # 安装/更新 openEuler 镜像
 ### 1. 先看可用范围
 
 ```console
-$ ./hvm-cli vm range
+$ ./hvm-cli range
 CPU 数范围     : 6 .. 8
 内存范围       : 6 .. 18          # 单位 GB
 ```
@@ -92,7 +92,7 @@ CPU 数范围     : 6 .. 8
 ### 2. 创建虚拟机（会顺带完成一次启动）
 
 ```console
-$ ./hvm-cli vm create \
+$ ./hvm-cli create \
       --name myvm \
       --image   /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
       --enhance /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso \
@@ -103,7 +103,7 @@ CreateVm 返回 rc=0 (OK)
 
 - **`CreateVm` 会顺带把虚拟机启动起来**（安装阶段就是这一次）：实测返回 rc=0 之后
   立刻就有 `stratovirt` 进程、`vms` 里状态不再是 0，且**安装盘与扩展盘两张都挂在这一刻**
-  —— 所以创建之后通常**不需要**再 `vm start`（详见 [3.1](#31-光盘怎么挂重要)）。
+  —— 所以创建之后通常**不需要**再 `start`（详见 [3.1](#31-光盘怎么挂重要)）。
   用完记得停机：`./hvm-cli force-stop myvm`；
 - `--image` 是安装盘 ISO。这个路径会被**自动转换**成媒体库视图
   `/storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/debian-...iso`
@@ -122,11 +122,11 @@ CreateVm 返回 rc=0 (OK)
 ### 3. 启动（开机）
 
 ```console
-$ ./hvm-cli vm start --name myvm --cpu 6 --mem 6
+$ ./hvm-cli start --name myvm --cpu 6 --mem 6
 ```
 
 - `--mem` **至少要给**：服务端不接受内存为 0（只给 `--name` 会返回
-  `invalid memory size: 0`）。范围见 `vm range`（本机是 6..18 GB）；
+  `invalid memory size: 0`）。范围见 `range`（本机是 6..18 GB）；
 - 其余参数可以省略：省略的字段服务端用创建时存档的值（实测：省略 `--cpu` 时
   仍按存档的 6 核启动，省略 `--bios` 时仍用存档的固件路径）。
 
@@ -146,8 +146,8 @@ $ strings /data/log/hwf_service/vmlog
 只是被包在 stratoVirt 自己的日志行里、并夹着 ANSI 控制序列 —— 所以 `strings`
 通常更好读。）
 
-> 注意：`vm create` 本身就会启动一次（安装阶段），所以刚创建完的虚拟机已经在跑；
-> 这里的 `vm start` 用于**之后**的启动。挂盘规则见下一节。
+> 注意：`create` 本身就会启动一次（安装阶段），所以刚创建完的虚拟机已经在跑；
+> 这里的 `start` 用于**之后**的启动。挂盘规则见下一节。
 
 启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
 可以这样确认：
@@ -166,18 +166,18 @@ $ pgrep -a stratovirt | grep myvm        # create 那次启动时命令行里能
 
 ### 3.1 光盘怎么挂（重要）
 
-挂盘发生在 **`vm create`**，不在 `vm start`：
+挂盘发生在 **`create`**，不在 `start`：
 
 | 操作 | 光盘 | 实测 |
 |---|---|---|
-| **`vm create`** | 安装盘（`--image`）+ 扩展盘（`--enhance`）**两张都会挂上** | `create` 返回 rc=0 后立刻能查到 `stratovirt` 进程（状态 9、`vm-info` 给出 PID），其命令行里 `media=cdrom` 计数为 **2** |
-| **之后的任何 `vm start`** | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` | 对该虚拟机执行 `start --image … --enhance …`，命令行里只有 UEFI 固件、磁盘、UEFI vars，`media=cdrom` 计数为 **0** |
+| **`create`** | 安装盘（`--image`）+ 扩展盘（`--enhance`）**两张都会挂上** | `create` 返回 rc=0 后立刻能查到 `stratovirt` 进程（状态 9、`vm-info` 给出 PID），其命令行里 `media=cdrom` 计数为 **2** |
+| **之后的任何 `start`** | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` | 对该虚拟机执行 `start --image … --enhance …`，命令行里只有 UEFI 固件、磁盘、UEFI vars，`media=cdrom` 计数为 **0** |
 
 也就是说：**`CreateVm` 会顺带完成一次启动**（安装阶段就是这一次），安装介质也只在这一次挂上；
 以后再启动要挂盘，用**热插拔**接口：
 
 ```console
-$ ./hvm-cli vm mount-cd --name myvm \
+$ ./hvm-cli mount-cd --name myvm \
       --image /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso
 已挂载: /storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/oetool.iso
 服务端返回: 1
@@ -188,7 +188,7 @@ $ ./hvm-cli vm mount-cd --name myvm \
 `QMP: --> device_add { driver: "usb-storage" }`，也就是以 USB 存储设备热插拔进去的。）
 
 > 两点说明：
-> 1. 因此 `vm create` 之后**通常不需要再 `vm start`** —— 它已经在跑（安装阶段）；
+> 1. 因此 `create` 之后**通常不需要再 `start`** —— 它已经在跑（安装阶段）；
 > 2. "`CreateVm` 为什么会启动"（推测与内部的 `InstallVm` / 快速启动流程有关）
 >    **尚未确认**，这里只记录实测到的行为。
 
@@ -217,7 +217,7 @@ $ ./hvm-cli force-stop myvm        # 强制关机（不需要客户机配合）
 ### 6. 删除（连磁盘一起删）
 
 ```console
-$ ./hvm-cli vm destroy myvm
+$ ./hvm-cli destroy myvm
 已销毁 myvm
 ```
 
@@ -365,10 +365,10 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 
 | 命令 | 用途 |
 |---|---|
-| `vm ctor [选项]` | 只构造 `CfgInfo` 入参对象并打印字段布局，**不调服务端**（验证构造配方） |
-| `vm view-state <0\|1\|2>` / `vm displays <id>` | 上报 `HapViewState` / 显示器 id 列表（研究视图机制用） |
-| `vm serial-read` / `vm serial-write` | 读写客户机通道（`ChannelInfo`） |
-| `vm import` / `vm export` | 服务端 `Import/ExportVmDiskImage`（UOS 磁盘迁移专用，见 api-notes §11） |
+| `ctor [选项]` | 只构造 `CfgInfo` 入参对象并打印字段布局，**不调服务端**（验证构造配方） |
+| `view-state <0\|1\|2>` / `displays <id>` | 上报 `HapViewState` / 显示器 id 列表（研究视图机制用） |
+| `serial-read` / `serial-write` | 读写客户机通道（`ChannelInfo`） |
+| `import` / `export` | 服务端 `Import/ExportVmDiskImage`（UOS 磁盘迁移专用，见 api-notes §11） |
 | `hash-name` | 已禁用（服务端返回的指针在 `GetHashName` 内部会段错误） |
 | `selftest` | 两条通路的加载自检（`hvm-cli selftest` / `openeuler selftest`） |
 | `share-volumes` | 列出全部共享卷（`GetAllSharedVolume` 的返回元素类型未还原，命令保留但直接报错） |
@@ -398,7 +398,7 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 
 - [x] `hvm-cli`：状态/能力/电源/快照/共享目录/网络/磁盘/显示/内存
 - [x] `hvm-cli`：**创建 / 启动 / 销毁虚拟机**（`CfgInfo` 手工构造，实测 `CreateVm` 返回 0）
-- [x] `hvm-cli`：安装盘与扩展盘挂载 + 运行中热插拔（`vm mount-cd` / `vm unmount-cd`）。实测：**`vm create` 那次启动**两张盘都会挂上，之后的 `start` 不再挂盘，改用 `mount-cd`；ISO 路径会自动转成媒体库视图
+- [x] `hvm-cli`：安装盘与扩展盘挂载 + 运行中热插拔（`mount-cd` / `unmount-cd`）。实测：**`create` 那次启动**两张盘都会挂上，之后的 `start` 不再挂盘，改用 `mount-cd`；ISO 路径会自动转成媒体库视图
 - [x] `hvm-cli`：主机 ↔ 客户机通道（`ChannelInfo` + `Send/RecvDataFromVm`）
 - [x] `hvm-cli`：LinuxFusion / RGM 运维面（`pause`/`resume`/剪贴板/图库/客户机磁盘共享/
       自动暂停之外的 23 个 kit 接口；kit 120 个方法已接 **78** 个）

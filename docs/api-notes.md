@@ -284,7 +284,7 @@ void onStatus(void *session, int sessionId, int status);        // 1=就绪 2=�
 
 ## 9. CfgInfo 手工构造（实测记录）
 
-`vm create` 已打通到服务端业务校验，过程与踩坑记录如下。
+`create` 已打通到服务端业务校验，过程与踩坑记录如下。
 
 ### 构造序列
 
@@ -359,7 +359,7 @@ hvm::CfgInfoBuilder::setCpuNum(int):
 用下面这条命令完整走通了 `CreateVm`（返回 rc=0）：
 
 ```bash
-./hvm-cli vm create --name win11 \
+./hvm-cli create --name win11 \
   --image   /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/Win11_....iso \
   --enhance /data/service/el2/100/hmdfs/account/files/Docs/Download/<app>/oetool.iso \
   --bios /system/opt/virt_service/virtualized_hwf/stratovirt-vars \
@@ -435,7 +435,7 @@ CheckWinImgPath(175)     Windows 安装镜像判定
   `vmlog` 里 `Permission denied` 计数为 0；
   但**只有 `CreateVm` 那一次启动**会挂这两张盘：之后即使 `start` 再传 `--image` / `--enhance`，
   命令行里也只剩 UEFI 固件、磁盘与 UEFI vars（实测，`media=cdrom` 计数为 0）。
-  装完之后要挂盘必须用热插拔接口 `MountCDDriveToVm`（`hvm-cli vm mount-cd`），
+  装完之后要挂盘必须用热插拔接口 `MountCDDriveToVm`（`hvm-cli mount-cd`），
   它通过 QMP 以 `usb-storage` 设备热插拔：`blockdev_add { node_name: "cdrom-drive1" }`
   → `device_add { driver: "usb-storage" }`，服务端返回分配的设备 id。
   服务端"第一次挂、之后不挂"的内部依据（推测是"已安装"标志，`DoStartVm` 内会调
@@ -504,7 +504,7 @@ RefBase::IncStrongRef(p + 48, &holder)
 | +16 | `std::string` | `password`（24 字节，+16..+39） |
 | +40 | bool | `isForceImport` |
 
-已实现：`src/cfginfo.{h,cpp}` 的 `MigrationOptionsBuilder`、`hvm-cli vm import` / `vm export`。
+已实现：`src/cfginfo.{h,cpp}` 的 `MigrationOptionsBuilder`、`hvm-cli import` / `export`。
 
 ### 11.2 服务端三道闸门（实测，逐步放行）
 
@@ -549,7 +549,7 @@ napi 侧属性名为 `channelName` / `channelInfo`。
   否则服务端报 `RecvDataFromVm:1048 data size invalid.`（402）；预分配后进入正常读取路径；
 - 第三个 `int` 参数与缓冲区大小相关（实测传 4096 有效）；
 - 已实现：`ChannelInfoBuilder`、`Client::sendDataToVm` / `recvDataFromVm`、
-  `hvm-cli vm serial-read` / `vm serial-write`（`--chan/--type/--arg/--data`）。
+  `hvm-cli serial-read` / `serial-write`（`--chan/--type/--arg/--data`）。
 
 ### 12.3 客户机的两条"串口"
 
@@ -628,7 +628,7 @@ ui/src/ohui_srv/msg_handle.rs:466   received focus-out event
 /data/storage/el2/base/preferences/hvm-cli-vms.list      # 一行一个虚拟机名（排序去重）
 ```
 
-- `vm create` 成功 → 追加；`vm destroy` 成功 → 移除（写临时文件再 rename，失败只提示不影响主操作）；
+- `create` 成功 → 追加；`destroy` 成功 → 移除（写临时文件再 rename，失败只提示不影响主操作）；
 - `hvm-cli list` = 读这份清单后用 `GetVmStatus` / `GetVmDiskImagePath` 逐台探测并打印表格；
 - 这样"忘了虚拟机名"就不再是死局 —— 名字在我们自己的清单里 ✓
   （备选恢复途径：`strings /data/log/hwf_service/vmlog*` 能从虚拟机路径里反推出名字，

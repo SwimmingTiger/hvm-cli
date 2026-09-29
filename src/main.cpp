@@ -117,20 +117,20 @@ void usage() {
         "\n"
         "虚拟机生命周期（CfgInfo 为逆向手工构造，见 docs/api-notes.md）：\n"
 
-        "  vm create --name N --image P [选项]\n"
-        "  vm start  --name N [选项]\n"
+        "  create --name N --image P [选项]\n"
+        "  start  --name N [选项]\n"
 
 
 
 
-        "  vm range                查询可用的 CPU / 内存范围（服务端校验依据）\n"
+        "  range                   查询可用的 CPU / 内存范围（服务端校验依据）\n"
 
-        "  vm mount-cd   --name N --image X.iso   挂载安装光盘\n"
-        "  vm unmount-cd --name N --image X.iso   卸载\n"
-        "  vm destroy N            销毁虚拟机\n"
+        "  mount-cd   --name N --image X.iso   挂载安装光盘\n"
+        "  unmount-cd --name N --image X.iso   卸载\n"
+        "  destroy N               销毁虚拟机\n"
         "    选项: --cpu N --mem GB --disk MB | --disk-gb GB\n"
         "          --bios PATH --enhance PATH --start-type N --partition --dynamic-mem\n"
-        "    单位（实测）：memorySize 为 GB（范围见 vm range），diskSize 为 MB 且 >= 65536\n"
+        "    单位（实测）：memorySize 为 GB（范围见 range），diskSize 为 MB 且 >= 65536\n"
         "  pause / resume [名字]   暂停 / 恢复虚拟机\n"
         "  lock-guest              锁定客户机（LockGuest）\n"
         "  lx-ota                  Linux 环境 OTA（LxOtaHandle）\n"
@@ -195,13 +195,13 @@ void usage() {
         "  swap-2d <MB>\n"
         "\n"
         "开发与验证命令（日常不需要；逆向/自检用，部分在 HiShell 身份下不可用）：\n"
-        "  vm ctor [选项]          仅构造 CfgInfo 并打印（不调服务，验证构造配方）\n"
-        "  vm view-state <0|1|2>   上报 HapViewState（研究视图机制）\n"
-        "  vm displays <id[,…]>    把显示器 id 列表交给服务端（同上）\n"
-        "  vm serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
-        "  vm serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
-        "  vm import --name N --src SRC --dst DST   服务端拷贝（UOS 磁盘迁移专用）\n"
-        "  vm export --name N --src SRC --dst DST   同上（导出）\n"
+        "  ctor [选项]             仅构造 CfgInfo 并打印（不调服务，验证构造配方）\n"
+        "  view-state <0|1|2>      上报 HapViewState（研究视图机制）\n"
+        "  displays <id[,…]>       把显示器 id 列表交给服务端（同上）\n"
+        "  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
+        "  serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
+        "  import --name N --src SRC --dst DST   服务端拷贝（UOS 磁盘迁移专用）\n"
+        "  export --name N --src SRC --dst DST   同上（导出）\n"
         "  selftest                kit 加载自检\n"
         "  hash-name               Hash 名（服务端实现有缺陷，已禁用）\n"
         "  share-volumes           列出全部共享卷（返回元素类型未还原，已禁用）\n"
@@ -1075,7 +1075,20 @@ int run(int argc, char **argv) {
         return 0;
     }
 
-    if (cmd == "vm") return cmdVm(c, a.pos);
+    // 虚拟机操作直接是顶层命令（hvm-cli 本身即 VM 工具，不再加 vm 前缀）
+    {
+        static const char *kVmActs[] = {"create", "start", "destroy", "mount-cd", "unmount-cd",
+                                        "range", "ctor", "view-state", "displays",
+                                        "serial-read", "serial-write", "import", "export"};
+        for (const char *act : kVmActs) {
+            if (cmd == act) {
+                std::vector<std::string> pos;
+                pos.push_back(cmd);
+                pos.insert(pos.end(), a.pos.begin(), a.pos.end());
+                return cmdVm(c, pos);
+            }
+        }
+    }
     if (cmd == "pause" || cmd == "resume" || cmd == "lock-guest" || cmd == "lx-ota" ||
         cmd == "lx-snapshot" || cmd == "rgm-status" || cmd == "recover-user-data" ||
         cmd == "autopause" ||
