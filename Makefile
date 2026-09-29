@@ -10,7 +10,7 @@
 # 两者都通过 dlopen 使用系统自带库，编译期只依赖 libdl。
 
 CXX      ?= clang++
-CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra
+CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -Iinclude -Isrc
 LDLIBS   ?= -ldl
 
 BIN_VM   := hvm-cli
@@ -28,11 +28,11 @@ PREFIX   ?= $(HOME)/.local
 all: $(BIN_VM) $(BIN_OE)
 
 $(BIN_VM): $(VM_SRCS) $(VM_HDRS)
-	$(CXX) $(CXXFLAGS) -Isrc -o $@ $(VM_SRCS) $(LDLIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $(VM_SRCS) $(LDLIBS)
 	@echo "构建完成: $@"
 
 $(BIN_OE): $(OE_SRCS) $(OE_HDRS)
-	$(CXX) $(CXXFLAGS) -Isrc -o $@ $(OE_SRCS) $(LDLIBS)
+	$(CXX) $(CXXFLAGS) -o $@ $(OE_SRCS) $(LDLIBS)
 	@echo "构建完成: $@"
 
 # 自检：分别验证两条通路的只读接口

@@ -7,7 +7,8 @@
 |---|---|---|
 | `ohos/linux_fusion/fusion_pty_ndk.h` | `/system/lib64/ndk/libfusion_pty_ndk.so` | 融合开发引擎 openEuler 终端通道的完整 C API（结构 + 函数原型，可直接 `#include` 使用） |
 | `ohos/vm_manager_service/cfg_info.h` | `libvmmanager_napi.z.so` / `libvm_manager.z.so` | `OHOS::VmManagerService::CfgInfo` 结构：尺寸、字段偏移、ArkTS 属性名、构造配方、序列化入口 |
-| `ohos/vm_manager_service/vm_manager_client_wrapper.h` | `/system/lib64/libvm_manager_kits.z.so` | `VmManagerClientWrapper` 的可调用符号名（mangled）+ SA/接口描述符 + 调用者白名单规则 + 实测返回码 |
+| `ohos/vm_manager_service/vm_manager_client_wrapper.h` | `/system/lib64/libvm_manager_kits.z.so` | `VmManagerClientWrapper` 的可调用符号名（mangled，45 条宏）+ SA/接口描述符 + 调用者白名单规则 |
+| `ohos/vm_manager_service/vm_manager_errcode.h` | 同上（服务端返回码） | 实测返回码的命名常量与 `ErrorName()`：`OHOS_VM_OK` / `OHOS_VM_ERR_NO_VIRTUAL_MACHINE` / `OHOS_VM_ERR_INVALID_VM_NAME` / `OHOS_VM_ERR_CFG_INFO_UNAVAILABLE` / `OHOS_VM_ERR_VM_IP_UNAVAILABLE` / `OHOS_VM_ERR_SNAPSHOT_UNAVAILABLE` 等 |
 
 ## 来源与可信度
 

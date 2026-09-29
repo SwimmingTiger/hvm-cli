@@ -1,6 +1,8 @@
 // hvm_client.cpp —— 虚拟机客户端封装实现
 #include "hvm_client.h"
 
+#include "ohos/vm_manager_service/vm_manager_errcode.h"
+
 #include <dlfcn.h>
 
 #include <map>
@@ -15,9 +17,10 @@ constexpr const char *kStringConst =
 constexpr const char *kStringRef =
     "ERNSt3__h12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE";
 
-// 本地错误码（与服务端返回码区分开）
-[[maybe_unused]] constexpr int kErrNotReady = -1001;  // kit 未加载
-constexpr int kErrNoSymbol = -1002;  // 符号不存在（版本不匹配）
+// 本地错误码统一使用 include/ohos/vm_manager_service/vm_manager_errcode.h 中的定义
+constexpr int kErrNoSymbol = OHOS_VM_ERR_SYMBOL_MISSING;
+// 调用方应先检查 ready()；此处保留常量以便按需返回
+[[maybe_unused]] constexpr int kErrNotReady = OHOS_VM_ERR_KIT_NOT_LOADED;
 
 }  // namespace
 

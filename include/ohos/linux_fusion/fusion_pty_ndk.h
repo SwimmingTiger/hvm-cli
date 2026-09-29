@@ -27,6 +27,18 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* ---------------------------------------------------------------- 返回码 */
+/** 成功。 */
+#define OH_PTY_OK 0
+/** 6：入参为空（manager / callback / config / sessionId 任一为 NULL）。 */
+#define OH_PTY_ERR_NULL_PARAM 6
+/**
+ * 13：会话尚未就绪时 SendData 的返回值。
+ * 实测：OpenPtySession 返回 0 之后的一小段时间内发送会得到 13，
+ * 且此时数据可能被丢弃 —— 应以「远端首次产生输出」作为就绪信号。
+ */
+#define OH_PTY_ERR_NOT_READY 13
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -34,6 +34,8 @@
 
 #include <cstdint>
 
+#include "ohos/vm_manager_service/vm_manager_errcode.h"
+
 namespace OHOS {
 namespace VmManagerService {
 
@@ -116,14 +118,11 @@ constexpr char16_t kInterfaceDescriptorVmCallback[] = u"OHOS.VmManager.IVmManage
 
 /* ------------------------------------------------------------- 返回值 */
 /**
- * 部分实测返回码：
- *   0            成功
- *   201          无虚拟机时 GetOpenEulerVersion
- *   401          服务端：虚拟机名非法（长度或含 ".."）
- *   404          服务端：CfgInfo 为空或反序列化失败
- *   405          无虚拟机时 GetVmIpv4Address
- *   0xF8FF000C   无虚拟机时 GetSnapshotList（OHOS 统一错误码风格）
- * 本仓库本地错误码（见 src/hvm_client.cpp）：-1001 kit 未加载 / -1002 符号缺失
+ * 返回码常量与可读名字见 ohos/vm_manager_service/vm_manager_errcode.h：
+ *   OHOS_VM_OK / OHOS_VM_ERR_NO_VIRTUAL_MACHINE / OHOS_VM_ERR_INVALID_VM_NAME /
+ *   OHOS_VM_ERR_CFG_INFO_UNAVAILABLE / OHOS_VM_ERR_VM_IP_UNAVAILABLE /
+ *   OHOS_VM_ERR_SNAPSHOT_UNAVAILABLE / OHOS_VM_ERR_KIT_NOT_LOADED /
+ *   OHOS_VM_ERR_SYMBOL_MISSING
  */
 
 }  // namespace VmManagerService
