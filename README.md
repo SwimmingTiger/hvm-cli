@@ -194,8 +194,16 @@ make install    # 可选，装到 ~/.local/bin
 
 ## 调试
 
-系统自带的 lldb-server 在应用沙箱里 `ptrace` 会被拒；用华为随开发者工具提供的
-`~/.local/bin/huawei-debug-lldb-server` 即可正常调试（脚本已封装）：
+系统自带的 lldb-server 在应用沙箱里 `ptrace` 会被拒。可改用**应用商店里的 CodeArts IDE**（`com.huawei.codearts`，
+注意与白名单一节提到的 `com.huawei.codearts.agent` 是两个应用）自带的 `huawei-debug-lldb-server`：它躺在 CodeArts IDE 自己的沙箱里，
+要在 **CodeArts IDE 的终端**里拷出来：
+
+```console
+$ mkdir -p ~/.local/bin
+$ cp /data/storage/el2/base/files/huawei-debug-lldb-server ~/.local/bin/
+```
+
+之后在 HiShell 终端里就能用（脚本已封装）：
 
 ```console
 $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt

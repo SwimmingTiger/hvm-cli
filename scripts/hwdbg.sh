@@ -2,7 +2,16 @@
 # hwdbg.sh —— 在鸿蒙 PC 沙箱内用 lldb 调试本机程序
 #
 # 背景：系统自带的 lldb-server 在当前身份下会 `ptrace failed: Permission denied`；
-#       华为随开发者工具提供的 huawei-debug-lldb-server 则可以正常拉起进程。
+#       应用商店里的 CodeArts IDE（com.huawei.codearts）自带一个自包含的
+#       huawei-debug-lldb-server，
+#       可以正常拉起进程。它位于 CodeArts IDE 自己的沙箱里，
+#       需要在 **CodeArts IDE 的终端**里把它拷出来：
+#
+#           mkdir -p ~/.local/bin
+#           cp /data/storage/el2/base/files/huawei-debug-lldb-server ~/.local/bin/
+#
+#       拷到 ~/.local/bin 之后，在 HiShell 终端里即可使用（也可用
+#       HVM_LLDB_SERVER 指向别处）。
 #
 # 用法:
 #   scripts/hwdbg.sh ./hvm-cli [端口]                    # 启动并进入 lldb 交互
@@ -19,7 +28,14 @@
 set -e
 
 SERVER=${HVM_LLDB_SERVER:-$HOME/.local/bin/huawei-debug-lldb-server}
-[ -x "$SERVER" ] || { echo "找不到 $SERVER（可用 HVM_LLDB_SERVER 指定）" >&2; exit 1; }
+[ -x "$SERVER" ] || {
+    echo "找不到可执行的 $SERVER" >&2
+    echo "获取方式：打开应用商店里的 CodeArts IDE，在它的终端里执行" >&2
+    echo "    mkdir -p ~/.local/bin" >&2
+    echo "    cp /data/storage/el2/base/files/huawei-debug-lldb-server ~/.local/bin/" >&2
+    echo "（也可用 HVM_LLDB_SERVER 指向其它位置）" >&2
+    exit 1
+}
 [ $# -ge 1 ] || { echo "用法: $0 <可执行文件> [端口] [lldb 参数...]" >&2; exit 2; }
 
 PROG=$1; shift

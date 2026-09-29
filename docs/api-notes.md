@@ -290,8 +290,16 @@ vm_manager [CheckWinImgPath:175] not image
 `ptrace failed: Permission denied`（应用沙箱禁 ptrace），
 `hdc shell`（uid 2000）又处在另一个挂载命名空间、且 `/data/local/tmp` 不可执行。
 
-**可行方案**：华为随开发者工具提供的
-`~/.local/bin/huawei-debug-lldb-server`（只依赖 musl libc 的自包含版本），
+**可行方案**：应用商店里的 **CodeArts IDE**（`com.huawei.codearts`）自带一个只依赖 musl libc 的自包含
+`huawei-debug-lldb-server`。它位于 CodeArts IDE 自己的沙箱里，需要在
+**CodeArts IDE 的终端**里拷到用户目录：
+
+```console
+$ mkdir -p ~/.local/bin
+$ cp /data/storage/el2/base/files/huawei-debug-lldb-server ~/.local/bin/
+```
+
+之后用 `~/.local/bin/huawei-debug-lldb-server`（即可），
 可以正常拉起进程被 lldb 调试。仓库脚本：
 
 ```bash
