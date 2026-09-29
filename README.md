@@ -114,15 +114,29 @@ CreateVm 返回 rc=0 (OK)
 ### 3. 启动（开机）
 
 ```console
-$ ./hvm-cli vm start --name myvm \
-      --bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
-      --mem 6
+$ ./hvm-cli vm start --name myvm --cpu 6 --mem 6
 ```
 
 - `--mem` **至少要给**：服务端不接受内存为 0（只给 `--name` 会返回
   `invalid memory size: 0`）。范围见 `vm range`（本机是 6..18 GB）；
 - 其余参数可以省略：省略的字段服务端用创建时存档的值（实测：省略 `--cpu` 时
   仍按存档的 6 核启动，省略 `--bios` 时仍用存档的固件路径）。
+
+虚拟机启动后可通过如下方式查看虚拟机串口输出：
+
+```console
+$ tail -f /data/log/hwf_service/vmlog
+```
+
+如果需要去除样式只看文本，用 `strings`：
+
+```console
+$ strings /data/log/hwf_service/vmlog
+```
+
+（该文件是 `-serial redirect-to-log` 的落点，GRUB 菜单与客户机控制台文本都在里面，
+只是被包在 stratoVirt 自己的日志行里、并夹着 ANSI 控制序列 —— 所以 `strings`
+通常更好读。）
 
 启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
 可以这样确认：
@@ -205,11 +219,8 @@ $ ./hvm-cli --vm myvm snapshot list       # 快照列表
 $ ./hvm-cli --vm myvm net ip              # 客户机 IPv4（需客户机已联网）
 ```
 
-安装过程中的客户机文本输出（GRUB 菜单、控制台日志）可以从这里看到：
-
-```console
-$ tail -f /data/log/hwf_service/vmlog
-```
+安装过程中的客户机文本输出（GRUB 菜单、控制台日志）见
+[「3. 启动」](#3-启动开机)一节的 `tail -f` / `strings` 用法。
 
 ### 参数规则（逆向自服务端校验，实测确认）
 
