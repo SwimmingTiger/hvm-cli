@@ -94,8 +94,9 @@ CPU 数范围     : 6 .. 8
 ```console
 $ ./hvm-cli vm create \
       --name myvm \
-      --image /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
-      --bios  /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
+      --image   /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
+      --enhance /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso \
+      --bios    /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
       --cpu 6 --mem 8 --disk-gb 128
 CreateVm 返回 rc=0 (OK)
 ```
@@ -104,16 +105,34 @@ CreateVm 返回 rc=0 (OK)
   `/storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/debian-...iso`
   —— 它是唯一能让 `stratovirt` 真正打开光盘的形式（原因见 [api-notes 第 10 节](docs/api-notes.md)）。
   账号 id（这里是 `100`）取自 `$USER`，多账号设备上第二个账号是 `101`；
+- `--enhance` 是**扩展盘（enhance ISO）**，**创建时必填**且必须是 `.iso` 文件
+  （服务端校验：`enhanceFilePath` 不能为空，否则 `create vm fail, enhance file path is null`）。
+  它对应客户机里的 `unattend` 槽位；
 - **磁盘不用自己准备**：框架按 `--disk-gb` 生成稀疏的
   `/data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2`。
 
 ### 3. 启动（开机）
 
 ```console
+# 首次启动（安装阶段）：挂安装盘 --image 与扩展盘 --enhance
 $ ./hvm-cli vm start --name myvm \
-      --bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
+      --image   /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
+      --enhance /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso \
+      --bios    /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
+      --cpu 6 --mem 8 --disk-gb 128
+
+# 装完之后再启动：只给扩展盘（安装盘只在第一次挂）
+$ ./hvm-cli vm start --name myvm \
+      --enhance /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso \
+      --bios    /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
       --cpu 6 --mem 8 --disk-gb 128
 ```
+
+> **安装盘（`--image`）只在第一次启动（安装阶段）挂载**，装完之后不再挂；
+> 之后每次启动要用的是**扩展盘（`--enhance`）**，它对应客户机里的 `unattend` 槽位。
+> （实测：首次启动传了 `--image` + `--enhance`，命令行里有 `id=disk` 安装盘与
+> `id=unattend` 扩展盘两张；后续启动不传这两个参数时，命令行里只剩磁盘。
+> "安装盘只在第一次挂"这一条来自使用者经验，我们尚未单独做对照实验。）
 
 启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
 可以这样确认：
@@ -124,7 +143,7 @@ $ ./hvm-cli vms myvm
 名字                     状态     活动     磁盘镜像
 myvm                     9        是       /data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2
 
-$ pgrep -a stratovirt | grep myvm        # 命令行里能看到两张光盘的 file=
+$ pgrep -a stratovirt | grep myvm        # 首次启动时能看到两张光盘的 file=
 ```
 
 > 服务端可能返回 `405 (VM_IP_UNAVAILABLE)`：那只是"启动后立刻查客户机 IP 没查到"，
@@ -227,7 +246,7 @@ $ ./hvm-cli --vm win11 disk path
 > 框架自动生成磁盘 `.../vm_manager/<hash>/<vm>/img/vm.qcow2`（稀疏，随写增长）。
 
 > ✅ **安装介质能挂上**（实测）：ISO 路径写成上面那种**媒体库视图**即可 ——
-> `CreateVm` 返回 0、启动后两张光盘都出现在 `stratovirt` 命令行里、
+> `CreateVm` 返回 0、首次启动后安装盘与扩展盘两张都出现在 `stratovirt` 命令行里、
 > `vmlog` 里 `Permission denied` 计数为 0。
 > 另外两种写法各有原因：用户视图路径在服务进程的命名空间里不存在（`realpath` 失败），
 > hmdfs 真实路径则是 `ohsw_stratovirt` 域读不了（SELinux）。
@@ -334,7 +353,7 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 
 - [x] `hvm-cli`：状态/能力/电源/快照/共享目录/网络/磁盘/显示/内存
 - [x] `hvm-cli`：**创建 / 启动 / 销毁虚拟机**（`CfgInfo` 手工构造，实测 `CreateVm` 返回 0）
-- [x] `hvm-cli`：安装盘挂载（自动转成媒体库视图路径，实测两张光盘都挂上）
+- [x] `hvm-cli`：安装盘与扩展盘挂载（自动转成媒体库视图路径，实测首次启动两张都挂上；安装盘只在第一次挂）
 - [x] `hvm-cli`：主机 ↔ 客户机通道（`ChannelInfo` + `Send/RecvDataFromVm`）
 - [x] `hvm-cli`：LinuxFusion / RGM 运维面（`pause`/`resume`/剪贴板/图库/客户机磁盘共享/
       自动暂停之外的 23 个 kit 接口；kit 120 个方法已接 **78** 个）
