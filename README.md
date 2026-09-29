@@ -214,6 +214,8 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 - [x] `hvm-cli`：**创建 / 启动 / 销毁虚拟机**（`CfgInfo` 手工构造，实测 `CreateVm` 返回 0）
 - [x] `hvm-cli`：安装盘挂载（自动转成媒体库视图路径，实测两张光盘都挂上）
 - [x] `hvm-cli`：主机 ↔ 客户机通道（`ChannelInfo` + `Send/RecvDataFromVm`）
+- [x] `hvm-cli`：LinuxFusion / RGM 运维面（`pause`/`resume`/剪贴板/图库/客户机磁盘共享/
+      自动暂停之外的 23 个 kit 接口；kit 120 个方法已接 **78** 个）
 - [x] `openeuler`：`exec` / `shell` / 共享目录 / 镜像安装
 - [ ] `DeviceInfo`(0x260) 内部字段逐个还原（各 `Unwrap*Device`）
 - [ ] 事件回调（`RegisterVmStatusCallback` / `IVmEventListener` 等）

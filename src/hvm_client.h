@@ -112,6 +112,32 @@ class Client {
     int displaysNumber(const std::vector<uint64_t> &displayIds);
     int stopVm(const std::string &name, bool clean);
 
+    // ------------------------------------------------------------ LinuxFusion / RGM 运维
+    int pauseVm();
+    int resumeVm(const std::string &vm);
+    int allSharedVolume(std::vector<std::string> &out);           // GetAllSharedVolume
+    int linuxPathFromOhPath(const std::vector<std::string> &in,
+                            std::vector<std::string> &out);        // GetLinuxPathFromOhPath
+    int deleteRgmImageFromVm(const std::string &name);
+    int setHostGalleryShared(const std::string &vm, bool on);
+    int pasteboardEnableState(bool &out);
+    int setPasteboardEnableState(bool on);
+    int pasteboardUsableState(bool &out);
+    int setPasteboardUsableState(bool on);
+    int addPasteboardSharedFolder(const std::string &a, const std::string &b);
+    int removePasteboardSharedFolder(const std::string &a);
+    int setVmHostNetProxyStatus(const std::string &vm, bool on);
+    int setProxyAutoSyncEnabled(const std::string &vm, bool on);
+    int setGuestDiskShared(const std::string &vm, const std::string &path, bool on);
+    int vmUniSocPerfRequest(const std::string &a, const std::string &b);
+    int vmUniSocPerfRequestEx(const std::string &a, bool flag, const std::string &b);
+    int sysAvailBufferLimit(uint64_t v);
+    int sysLowBufferLimit(uint64_t v);
+    int toggleScreenLockTask(bool on);
+    int tabletSwitchChanged(int v);
+    int lockGuest();
+    int lxOtaHandle();
+
     // ------------------------------------------------------------ 电源
     int forceStop(const std::string &vm);
     int quitByRebootHost();

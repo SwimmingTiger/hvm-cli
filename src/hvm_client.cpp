@@ -380,6 +380,171 @@ int Client::stopVm(const std::string &name, bool clean) {
     }
 }
 
+
+// ------------------------------------------------- LinuxFusion / RGM 运维
+int Client::pauseVm() {
+    using Fn = int (*)(void *);
+    auto f = resolve<Fn>("PauseVm");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::resumeVm(const std::string &vm) {
+    using Fn = int (*)(void *, const std::string &);
+    auto f = resolve<Fn>("ResumeVm");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::allSharedVolume(std::vector<std::string> &out) {
+    // 按值返回 std::vector<std::string>（sret）
+    using Fn = std::vector<std::string> (*)(void *);
+    auto f = resolve<Fn>("GetAllSharedVolume");
+    if (f == nullptr) return kErrNoSymbol;
+    try { out = f(instance_); return 0; } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::linuxPathFromOhPath(const std::vector<std::string> &in,
+                                std::vector<std::string> &out) {
+    using Fn = int (*)(void *, const std::vector<std::string> &, std::vector<std::string> &);
+    auto f = resolve<Fn>("GetLinuxPathFromOhPath");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, in, out); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::deleteRgmImageFromVm(const std::string &name) {
+    using Fn = int (*)(void *, const std::string &);
+    auto f = resolve<Fn>("DeleteRgmImageFromVm");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, name); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setHostGalleryShared(const std::string &vm, bool on) {
+    using Fn = int (*)(void *, const std::string &, bool);
+    auto f = resolve<Fn>("SetHostGallerySharedEnabled");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, on); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::pasteboardEnableState(bool &out) {
+    using Fn = bool (*)(void *);
+    auto f = resolve<Fn>("GetPasteboardEnableState");
+    if (f == nullptr) return kErrNoSymbol;
+    try { out = f(instance_); return 0; } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setPasteboardEnableState(bool on) {
+    using Fn = int (*)(void *, bool);
+    auto f = resolve<Fn>("SetPasteboardEnableState");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, on); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::pasteboardUsableState(bool &out) {
+    using Fn = bool (*)(void *);
+    auto f = resolve<Fn>("GetPasteboardUsableState");
+    if (f == nullptr) return kErrNoSymbol;
+    try { out = f(instance_); return 0; } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setPasteboardUsableState(bool on) {
+    using Fn = int (*)(void *, bool);
+    auto f = resolve<Fn>("SetPasteboardUsableState");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, on); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::addPasteboardSharedFolder(const std::string &a, const std::string &b) {
+    using Fn = int (*)(void *, const std::string &, const std::string &);
+    auto f = resolve<Fn>("AddPasteboardSharedFolder");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, a, b); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::removePasteboardSharedFolder(const std::string &a) {
+    using Fn = int (*)(void *, const std::string &);
+    auto f = resolve<Fn>("RemovePasteboardSharedFolder");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, a); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setVmHostNetProxyStatus(const std::string &vm, bool on) {
+    using Fn = int (*)(void *, const std::string &, bool);
+    auto f = resolve<Fn>("SetVmHostNetProxyStatus");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, on); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setProxyAutoSyncEnabled(const std::string &vm, bool on) {
+    using Fn = int (*)(void *, const std::string &, bool);
+    auto f = resolve<Fn>("SetProxyAutoSyncEnabled");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, on); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setGuestDiskShared(const std::string &vm, const std::string &path, bool on) {
+    using Fn = int (*)(void *, const std::string &, const std::string &, bool);
+    auto f = resolve<Fn>("SetGuestDiskShared");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, path, on); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::vmUniSocPerfRequest(const std::string &a, const std::string &b) {
+    using Fn = int (*)(void *, const std::string &, const std::string &);
+    auto f = resolve<Fn>("VmUniSocPerfRequest");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, a, b); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::vmUniSocPerfRequestEx(const std::string &a, bool flag, const std::string &b) {
+    using Fn = int (*)(void *, const std::string &, bool, const std::string &);
+    auto f = resolve<Fn>("VmUniSocPerfRequestEx");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, a, flag, b); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::sysAvailBufferLimit(uint64_t v) {
+    using Fn = int (*)(void *, uint64_t);
+    auto f = resolve<Fn>("SysAvailBufferLimit");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, v); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::sysLowBufferLimit(uint64_t v) {
+    using Fn = int (*)(void *, uint64_t);
+    auto f = resolve<Fn>("SysLowBufferLimit");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, v); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::toggleScreenLockTask(bool on) {
+    using Fn = int (*)(void *, bool);
+    auto f = resolve<Fn>("ToggleScreenLockTask");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, on); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::tabletSwitchChanged(int v) {
+    using Fn = int (*)(void *, int32_t);
+    auto f = resolve<Fn>("TabletSwitchChanged");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, v); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::lockGuest() {
+    using Fn = int (*)(void *);
+    auto f = resolve<Fn>("LockGuest");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::lxOtaHandle() {
+    using Fn = int (*)(void *);
+    auto f = resolve<Fn>("LxOtaHandle");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_); } catch (...) { return kErrNoSymbol; }
+}
+
 // ---------------------------------------------------------------------- 电源
 int Client::forceStop(const std::string &vm) {
     using Fn = int (*)(void *, const std::string &);

@@ -568,3 +568,72 @@ ui/src/ohui_srv/msg_handle.rs:466   received focus-out event
 |---|---|
 | 交互式装系统 / 看画面 | 只能借**厂商合作应用的界面**（OSEasy / Sanway）：用它们的 UI 新建一台虚拟机、镜像选下载目录里的 ISO |
 | 自动化控制**自己的**虚拟机 | 用本仓库的 `hvm-cli`（借 HiShell 身份过白名单）：create / start / stop / 磁盘 / 快照 / 网络端口转发 / 共享目录 / 通道读写 |
+
+## 14. LinuxFusion / RGM 接口清单与覆盖情况
+
+### 14.1 两条通路的接口面
+
+| 通路 | 入口 | 我们用到 | 备注 |
+|---|---|---|---|
+| 融合 PTY（NDK） | `libfusion_pty_ndk.so` 的 10 个 `Oh*` 函数 | 9 个 | 只差 `OhDeletePtyManager`（依赖进程退出回收） |
+| 融合 napi（应用侧 JS） | `liblinuxfusionservice_napi.z.so` / `liblinuxvmmanager_napi.z.so` | 0 | 见 14.3 |
+| vm_manager kit | `VmManagerClientWrapper` 120 个方法 | **78** | `hvm-cli` 借 HiShell 身份调用 |
+
+### 14.2 已接的 78 个方法里，本批新增 23 个
+
+```
+PauseVm ResumeVm LockGuest LxOtaHandle DeleteRgmImageFromVm
+SetHostGallerySharedEnabled SetGuestDiskShared SetVmHostNetProxyStatus SetProxyAutoSyncEnabled
+Get/SetPasteboardEnableState Get/SetPasteboardUsableState Add/RemovePasteboardSharedFolder
+VmUniSocPerfRequest VmUniSocPerfRequestEx SysAvailBufferLimit SysLowBufferLimit
+ToggleScreenLockTask TabletSwitchChanged
+```
+
+对应命令：`pause` / `resume` / `lock-guest` / `lx-ota` / `rgm-image-delete` /
+`gallery-share` / `guest-disk-share` / `net proxy-status-on|off` / `net proxy-auto-on|off` /
+`pasteboard …` / `perf` / `perf-ex` / `buffer avail|low` / `screen-lock-task` / `tablet`。
+
+实测状态（其余因怕影响他人正在使用的虚拟机，只做了"符号与调用链"冒烟测试）：
+
+| 命令 | 实测 |
+|---|---|
+| `pasteboard status` | ✅ 返回 `开 / 可用` |
+| `buffer avail <n>` | ✅ 返回 0（**语义见 14.4**） |
+| `share-volumes` | ❌ 见 14.3（命令保留，明确报错） |
+| `linux-path <路径…>` | ❌ 见 14.3 |
+| `perf <a> <b>` | ❌ 服务端 `permission denied` |
+
+### 14.3 本批撞到的三条限制（重要）
+
+1. **`GetAllSharedVolume()` 的返回元素是私有类。** 它的参数形状与 `GetSharedFolder()`
+   完全相同（都无参），差别在返回类型 —— 实测按 `std::vector<std::string>` 解释会
+   **段错误**（析构不匹配）。`hvm-cli share-volumes` 因此改为明确报错（rc=3），
+   等还原出元素类型再接。
+2. **`GetLinuxPathFromOhPath` 只允许 LinuxFusion 服务调用。** 服务端日志：
+   ```
+   [(CheckCallingProcNameFromLinuxFusionService:780)] GetNativeTokenInfo failed.
+   [(GetUpdatedSharedPath:3065)] GetSharedFolder failed
+   ```
+   即这条通路不止"调用者白名单"一道门，还有**按服务身份**的限制 —— 我们的 HiShell
+   身份也会被拒（rc=-1）。
+3. **`VmUniSocPerfRequest` 服务端 `permission denied`。**
+
+### 14.4 `SysAvailBufferLimit` / `SysLowBufferLimit` 的真实语义
+
+反汇编 `VmAssistantManager::SysAvailBufferLimit`：它只是 `*((_QWORD*)this + 179) = 参数`
+—— 把值**存进服务端成员**，即这两个接口是**应用向服务端上报自己的内存阈值**，
+不是"查询/设置系统值"。
+⚠️ 因此不要随意设置：实测时用过 1 字节，随后已恢复为 8 GiB（8589934592）。
+
+### 14.5 仍未接的 42 个方法
+
+| 组 | 方法 |
+|---|---|
+| 端口转发 | `SetPortForwardForNat` `GetPortForwardForNat` `Set/GetLocalhostForwardFromVmToHost`（需要私有类 `PortInfoList`） |
+| USB 直通 | `MountUSBToVm` `UnmountUSBFromVm`（需要私有类 `USBDevice`） |
+| 自动暂停 | `SetAutoPauseTime`（需要私有类 `AutoPauseTime`）`Start/StopAutoPauseMonitor` |
+| 镜像与快照运维 | `UpdateEulerOSImage` `HandleLxSnapshot` `GetRgmImageStatusFromVm` `RecoverUserData` `RedirectGuestUserProfile` `GetAllSharedVolume` `GetLinuxPathFromOhPath` |
+| 事件回调 | `RegVmEventCallback` `UnRegVmEventCallback`、`Register/Unregister{VmStatus,DataRecovery,RequireBigMem,VirtioMemory,VmDiskExported,VmDiskMigration}`、`RegisterDeathRecipient` |
+| 服务端通知实现 | `Notify{VmStatusChanged,VmEvent,HapExitToVm,VmDiskExported,VmDiskMigrationProgress,DataRecoveryProgress,VirtioMemoryChanged,RequireBigMemFinish,UpdateRgmConfigResult}` |
+| 视图/表单 | `CreateVmApplicationForm` `BackgroundChangeEvent` `FocusStateChangeEvent` |
+| 其他 | `SetVmNetMode`（需要 `NetMode` 枚举语义）、`CreateVmApplicationForm` 相关的表单能力 |

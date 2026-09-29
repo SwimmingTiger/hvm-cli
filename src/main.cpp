@@ -129,6 +129,20 @@ void usage() {
         "    单位（实测）：memorySize 为 GB（范围见 vm range），diskSize 为 MB 且 >= 65536\n"
         "          --start-type N --partition --dynamic-mem\n"
         "    注意: 不带 --apply 时为预演，不产生副作用\n"
+        "  pause / resume [名字]   暂停 / 恢复虚拟机\n"
+        "  lock-guest              锁定客户机（LockGuest）\n"
+        "  lx-ota                  Linux 环境 OTA（LxOtaHandle）\n"
+        "  linux-data-delete       删除 Linux 数据镜像\n"
+        "  rgm-image-delete <镜像> 删除 RGM 镜像（DeleteRgmImageFromVm）\n"
+        "  share-volumes           列出全部共享卷（GetAllSharedVolume）\n"
+        "  linux-path <宿主路径..> 宿主路径 → 客户机内路径（GetLinuxPathFromOhPath）\n"
+        "  gallery-share on|off    宿主图库共享（SetHostGallerySharedEnabled）\n"
+        "  guest-disk-share <路径> on|off  客户机磁盘共享\n"
+        "  pasteboard [status|enable|disable|usable-enable|usable-disable|add A B|remove A]\n"
+        "  buffer avail|low <字节> 内存缓冲上限\n"
+        "  perf <a> <b> / perf-ex <a> on|off <b>  性能请求\n"
+        "  screen-lock-task on|off 锁屏任务开关\n"
+        "  tablet <int>            平板切换上报\n"
         "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
         "  stratovirt-mem          stratoVirt 占用内存\n"
         "  host-sn                 宿主 SN\n"
@@ -304,6 +318,176 @@ std::string toServicePath(const std::string &in) {
         return in;  // 已是服务端路径（/storage/media/... 或 /system/... 等）
     }
     return std::string(kMediaPrefix) + kUserId + "/local/files/Docs/" + rest;
+}
+
+// ---------------------------------------------------------------- LinuxFusion / RGM 运维
+//: 这一组都是 kit 接口直通：签名已由 include/ohos/vm_manager_service/vm_manager_kits.h
+//: 给出（编译器生成的符号名），不需要构造任何私有类。
+static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
+    const std::string &vm = a.vm;
+    auto onoff = [](const std::string &v) {
+        return v == "on" || v == "1" || v == "true" || v == "enable";
+    };
+    auto arg = [&](std::size_t i) { return i < a.pos.size() ? a.pos[i] : std::string(); };
+    auto report = [&](int rc, const char *what) {
+        if (rc != 0) return fail(cmd, rc, std::string(what) + " 失败");
+        if (g_json) {
+            Json j(cmd);
+            j.num("rc", rc);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s 完成\n", what);
+        }
+        return 0;
+    };
+
+    if (cmd == "pause") {
+        int rc = c.pauseVm();
+        if (rc != 0) return fail(cmd, rc, "PauseVm 失败");
+        printf("已请求暂停活动虚拟机\n");
+        return 0;
+    }
+    if (cmd == "resume") {
+        std::string name = a.pos.empty() ? vm : a.pos[0];
+        int rc = c.resumeVm(name);
+        if (rc != 0) return fail(cmd, rc, "ResumeVm 失败");
+        printf("已请求恢复 %s\n", name.c_str());
+        return 0;
+    }
+    if (cmd == "lock-guest") return report(c.lockGuest(), "锁定客户机");
+    if (cmd == "lx-ota") return report(c.lxOtaHandle(), "Linux 环境 OTA");
+    if (cmd == "linux-data-delete") return report(c.deleteLinuxDataImage(), "删除 Linux 数据镜像");
+    if (cmd == "rgm-image-delete") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "rgm-image-delete 需要 <镜像名>\n");
+            return 2;
+        }
+        return report(c.deleteRgmImageFromVm(a.pos[0]), "删除 RGM 镜像");
+    }
+    if (cmd == "share-volumes") {
+        // 故意不调用：GetAllSharedVolume() 的参数形状与 GetSharedFolder() 相同（无参），
+        // 差别在返回类型 —— 实测按 vector<string> 解释会段错误，说明元素是私有类。
+        // 需要先在 [N]/[S] 里还原该元素类之后才能接。
+        if (g_json) {
+            Json j(cmd);
+            j.boolean("supported", false).str("reason", "GetAllSharedVolume 的返回元素类型未还原");
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("暂不支持：GetAllSharedVolume() 的返回元素是私有类（按 vector<string> 解释会崩溃）。\n"
+                   "需要用同样的方法还原该元素类型的布局后才能实现。\n");
+        }
+        return 3;
+    }
+    if (cmd == "linux-path") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "linux-path 需要至少一个宿主路径\n");
+            return 2;
+        }
+        std::vector<std::string> out;
+        int rc = c.linuxPathFromOhPath(a.pos, out);
+        if (rc != 0) {
+            // 服务端日志: CheckCallingProcNameFromLinuxFusionService:780 GetNativeTokenInfo failed
+            //             GetUpdatedSharedPath:3065 GetSharedFolder failed
+            return fail(cmd, rc,
+                        "GetLinuxPathFromOhPath 失败（该接口只允许 LinuxFusion 服务自己调用，"
+                        "HiShell 身份也会被拒）");
+        }
+        for (std::size_t i = 0; i < a.pos.size(); ++i) {
+            printf("%s  →  %s\n", a.pos[i].c_str(), i < out.size() ? out[i].c_str() : "(无)");
+        }
+        return 0;
+    }
+    if (cmd == "gallery-share") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "gallery-share on|off\n");
+            return 2;
+        }
+        return report(c.setHostGalleryShared(vm, onoff(a.pos[0])), "设置图库共享");
+    }
+    if (cmd == "guest-disk-share") {
+        if (a.pos.size() < 2) {
+            fprintf(stderr, "guest-disk-share <路径> on|off\n");
+            return 2;
+        }
+        return report(c.setGuestDiskShared(vm, a.pos[0], onoff(a.pos[1])), "设置客户机磁盘共享");
+    }
+    if (cmd == "pasteboard") {
+        const std::string sub = arg(0);
+        if (sub.empty() || sub == "status") {
+            bool en = false, usable = false;
+            int rc1 = c.pasteboardEnableState(en);
+            int rc2 = c.pasteboardUsableState(usable);
+            if (rc1 != 0 && rc2 != 0) return fail(cmd, rc1, "查询剪贴板状态失败");
+            if (g_json) {
+                Json j(cmd);
+                j.boolean("enabled", en).boolean("usable", usable);
+                printf("%s\n", j.ok().c_str());
+            } else {
+                printf("剪贴板共享: %s\n可用状态  : %s\n", en ? "开" : "关", usable ? "可用" : "不可用");
+            }
+            return 0;
+        }
+        if (sub == "enable") return report(c.setPasteboardEnableState(true), "开启剪贴板共享");
+        if (sub == "disable") return report(c.setPasteboardEnableState(false), "关闭剪贴板共享");
+        if (sub == "usable-enable") return report(c.setPasteboardUsableState(true), "置剪贴板为可用");
+        if (sub == "usable-disable") return report(c.setPasteboardUsableState(false), "置剪贴板为不可用");
+        if (sub == "add") {
+            if (a.pos.size() < 3) {
+                fprintf(stderr, "pasteboard add <宿主目录> <客户机目录>\n");
+                return 2;
+            }
+            return report(c.addPasteboardSharedFolder(a.pos[1], a.pos[2]), "添加共享目录");
+        }
+        if (sub == "remove") {
+            if (a.pos.size() < 2) {
+                fprintf(stderr, "pasteboard remove <宿主目录>\n");
+                return 2;
+            }
+            return report(c.removePasteboardSharedFolder(a.pos[1]), "移除共享目录");
+        }
+        fprintf(stderr, "未知的 pasteboard 子命令: %s\n", sub.c_str());
+        return 2;
+    }
+    if (cmd == "buffer") {
+        if (a.pos.size() < 2) {
+            fprintf(stderr, "buffer avail|low <字节数>\n");
+            return 2;
+        }
+        const uint64_t v = strtoull(a.pos[1].c_str(), nullptr, 10);
+        if (a.pos[0] == "avail") return report(c.sysAvailBufferLimit(v), "设置可用缓冲上限");
+        if (a.pos[0] == "low") return report(c.sysLowBufferLimit(v), "设置低内存缓冲上限");
+        fprintf(stderr, "未知的 buffer 子命令: %s\n", a.pos[0].c_str());
+        return 2;
+    }
+    if (cmd == "perf") {
+        if (a.pos.size() < 2) {
+            fprintf(stderr, "perf <参数一> <参数二>\n");
+            return 2;
+        }
+        return report(c.vmUniSocPerfRequest(a.pos[0], a.pos[1]), "性能请求");
+    }
+    if (cmd == "perf-ex") {
+        if (a.pos.size() < 3) {
+            fprintf(stderr, "perf-ex <参数一> on|off <参数二>\n");
+            return 2;
+        }
+        return report(c.vmUniSocPerfRequestEx(a.pos[0], onoff(a.pos[1]), a.pos[2]), "性能请求(Ex)");
+    }
+    if (cmd == "screen-lock-task") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "screen-lock-task on|off\n");
+            return 2;
+        }
+        return report(c.toggleScreenLockTask(onoff(a.pos[0])), "切换锁屏任务");
+    }
+    if (cmd == "tablet") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "tablet <int>\n");
+            return 2;
+        }
+        return report(c.tabletSwitchChanged(atoi(a.pos[0].c_str())), "上报平板切换");
+    }
+    return 2;
 }
 
 // ---------------------------------------------------------------- vm 子命令
@@ -746,6 +930,13 @@ int run(int argc, char **argv) {
     }
 
     if (cmd == "vm") return cmdVm(c, a.pos);
+    if (cmd == "pause" || cmd == "resume" || cmd == "lock-guest" || cmd == "lx-ota" ||
+        cmd == "linux-data-delete" || cmd == "rgm-image-delete" || cmd == "share-volumes" ||
+        cmd == "linux-path" || cmd == "gallery-share" || cmd == "guest-disk-share" ||
+        cmd == "pasteboard" || cmd == "buffer" || cmd == "perf" || cmd == "perf-ex" ||
+        cmd == "screen-lock-task" || cmd == "tablet") {
+        return cmdFusion(c, cmd, a);
+    }
 
     if (cmd == "info" || cmd == "status") return cmdInfo(c);
 
@@ -1042,8 +1233,21 @@ int run(int argc, char **argv) {
 
     // ------------------------------------------------------------ 网络
     if (cmd == "net") {
-        NEED_ARGS(1, "hvm-cli net ip|proxy|share-on|share-off|dns-on|dns-off");
+        NEED_ARGS(1, "hvm-cli net ip|proxy|share-on|share-off|dns-on|dns-off|"
+                      "proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off");
         const std::string &act = a.pos[0];
+        if (act == "proxy-status-on" || act == "proxy-status-off") {
+            int rc = c.setVmHostNetProxyStatus(a.vm, act == "proxy-status-on");
+            if (rc != 0) return fail(cmd, rc, "SetVmHostNetProxyStatus 失败");
+            printf("已设置宿主网络代理状态: %s\n", act == "proxy-status-on" ? "开" : "关");
+            return 0;
+        }
+        if (act == "proxy-auto-on" || act == "proxy-auto-off") {
+            int rc = c.setProxyAutoSyncEnabled(a.vm, act == "proxy-auto-on");
+            if (rc != 0) return fail(cmd, rc, "SetProxyAutoSyncEnabled 失败");
+            printf("已设置代理自动同步: %s\n", act == "proxy-auto-on" ? "开" : "关");
+            return 0;
+        }
         if (act == "ip") {
             std::string ip;
             int rc = c.vmIpv4Address(a.vm, ip);
