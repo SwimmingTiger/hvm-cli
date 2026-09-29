@@ -170,6 +170,24 @@ virtual-dir-add  guest-drives-share  detect-silent-audio  tpm-reconnect
 blockdev-snapshot-internal-sync  trace-get-state
 ```
 
+### 6.y 补充：停止 / 暂停的实测语义（都需要"客户机已起来"）
+
+在**我们自己**的虚拟机（`debian`，挂在 Debian 安装盘、停在 GRUB 菜单）上逐一实测：
+
+| 调用 | 结果 | 服务端说明 |
+|---|---|---|
+| `StopVm(name, false/true)` | `405` | `HostService has lost connection with GuestAgentService during calling its Async method`；`[Power Request] system power request calling failed, errCode: -67174385` —— **`StopVm` 是"请求客户机自行关机"**，要走客户机里的 GuestAgent，客户机没起来就必然失败 |
+| `PauseVm()` | `201` | 无虚拟机可用（同样要求客户机已进入可暂停状态） |
+| `ResumeVm(name)` | `405` | 客户机 IP 不可用 |
+| `GetPortForwardForNat` | `405` | 客户机 IP 不可用（**在此之前**在别人虚拟机上报的是 `not current running instance`，说明该接口按调用方应用解析"当前实例"） |
+| `GetLocalhostForwardFromVmToHost` | `405` | 同上（别人虚拟机上报 `vm state invalid=2`） |
+| `ForceStopVm(name)` | `0` ✅ | **唯一在"客户机没起来"时也能停机的接口** |
+
+结论：**`stop` 与 `force-stop` 不是同义词** —— 前者依赖客户机侧代理，后者直接断电。
+因此 `GetPortForwardForNat` 的条目解析（`PortInfoList` 布局）**仍是未端到端验证**：
+它要求客户机已有 IP，而我们的虚拟机没有可引导的系统（见第 13 节：没有画面与键鼠，
+无法交互装系统）。已接的命令保持"已接、待实测"的标注。
+
 ## 7. 复现调查的命令
 
 ```bash
@@ -685,9 +703,10 @@ StartAutoPauseMonitor           StopAutoPauseMonitor
 | `Start/StopAutoPauseMonitor` | 与已接的 `SetAutoPauseTime` 配套 |
 | `RedirectGuestUserProfile` | 参数语义未定 |
 
-**已接但待实测**（因当前没有可用的运行中虚拟机，见 §14.2 的说明）：
-`Get/SetPortForwardForNat`、`Get/SetLocalhostForwardFromVmToHost` —— 签名与传参已被服务端
-接受（错误信息为 `not current running instance`），但条目解析与写入行为尚未端到端验证。
+**已接但待实测**：`Get/SetPortForwardForNat`、`Get/SetLocalhostForwardFromVmToHost`。
+已在自己运行的虚拟机上验证到"签名与传参正确、调用打到正确的实例"这一步，
+但查询需要**客户机已有 IP**（返回 `405`），而我们的虚拟机没有可引导的系统
+（§13：无画面无键鼠，无法交互装系统），因此条目解析仍未端到端验证。详见 §6.y。
 
 > `GetLinuxPathFromOhPath` 与 `VmUniSocPerfRequest(Ex)` 已接但**服务端按调用者身份拒绝**
 > （见 §14.3），不属于"未实现"。

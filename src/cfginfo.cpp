@@ -309,8 +309,9 @@ std::string CfgInfoBuilder::dump() const {
     snprintf(buf, sizeof buf,
              "CfgInfo@%p base=%p vptr=%p\n"
              "  cpuNum(+12)        = %d\n"
-             "  memorySize(+16)    = %d MB\n"
-             "  diskSize(+20)      = %d GB\n"
+             // 单位来自服务端校验实测：memorySize 是 GB（范围 6..18），diskSize 是 MB（>=65536）
+             "  memorySize(+16)    = %d GB\n"
+             "  diskSize(+20)      = %d MB\n"
              "  diskPartition(+24) = %d\n"
              "  dynamicMemory(+25) = %d\n"
              "  biosPath(+32)      = \"%s\"\n"

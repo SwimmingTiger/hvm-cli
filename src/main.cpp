@@ -166,7 +166,8 @@ void usage() {
         "  is-installing           是否安装中\n"
         "\n"
         "电源:\n"
-        "  force-stop              强制关机\n"
+        "  stop [名字] [--clean]   正常关机（服务端 StopVm）\n"
+        "  force-stop [名字]       强制关机（服务端 ForceStopVm）\n"
         "  quit-by-reboot-host     宿主机重启导致退出\n"
         "  require-big-mem         申请大内存\n"
         "\n"
@@ -1143,6 +1144,24 @@ int run(int argc, char **argv) {
     }
 
     // ------------------------------------------------------------ 电源
+    if (cmd == "stop") {
+        // 服务端 StopVm(name, bool)：正常关机（force-stop 是 ForceStopVm 强制关机）
+        std::string vm = a.pos.empty() ? a.vm : a.pos[0];
+        bool clean = false;
+        for (std::size_t i = 1; i < a.pos.size(); ++i) {
+            if (a.pos[i] == "--clean") clean = true;
+        }
+        int rc = c.stopVm(vm, clean);
+        if (rc != 0) return fail(cmd, rc, "StopVm 失败");
+        if (g_json) {
+            Json j(cmd);
+            j.str("vm", vm).boolean("clean", clean);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("已请求关机 %s%s\n", vm.c_str(), clean ? "（clean）" : "");
+        }
+        return 0;
+    }
     if (cmd == "force-stop") {
         std::string vm = a.pos.empty() ? a.vm : a.pos[0];
         int rc = c.forceStop(vm);

@@ -151,11 +151,17 @@ $ ./hvm-cli resume myvm            # 恢复
 ### 5. 停止
 
 ```console
-$ ./hvm-cli force-stop myvm        # 强制关机（当前唯一可用的"停止"）
+$ ./hvm-cli stop myvm              # 请求客户机自行关机（走客户机里的 GuestAgent）
+$ ./hvm-cli stop myvm --clean      # 同上，clean=true
+$ ./hvm-cli force-stop myvm        # 强制关机（不需要客户机配合）
 ```
 
-> ⚠️ 正常关机（服务端 `StopVm(name, clean)`）**还没有对应的 CLI 命令**
-> —— 客户端封装里有 `stopVm()`，但没接到命令行上。见「实现状态」。
+两者差别**很关键**（实测）：
+
+| 命令 | 服务端 API | 生效条件 |
+|---|---|---|
+| `stop` | `StopVm(name, clean)` | **需要客户机里的 GuestAgent 在线** —— 它本质是"请客户机自己关机"。客户机没起来（例如停在 GRUB）会返回 `405`，服务端日志是 `HostService has lost connection with GuestAgentService` / `system power request calling failed` |
+| `force-stop` | `ForceStopVm(name)` | 直接关掉，实测任何状态下都能停（我们自己那台停在 GRUB 时也只有它能停） |
 
 ### 6. 删除（连磁盘一起删）
 
