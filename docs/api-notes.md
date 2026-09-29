@@ -209,7 +209,7 @@ void onSignal(void *session, int sessionId, int signal);
 void onStatus(void *session, int sessionId, int status);        // 1=就绪 2=会话结束
 ```
 
-两个实测踩坑：
+三个实测踩坑：
 
 1. `OhGetPtyManager` 是**带出参**的（`int OhGetPtyManager(void**)`）。
    当成无参返回值调用会立刻段错误。
@@ -218,4 +218,13 @@ void onStatus(void *session, int sessionId, int status);        // 1=就绪 2=�
    同理，用 `echo MARKER$?` 探测结束时要让标记在 shell 侧拼出来
    （如 `M=__X; echo ${M}_START; cmd; echo ${M}__$?`），
    否则命令回显里就会出现同样的字面量，导致误判"命令已结束"。
+3. **过早发送会被静默丢弃**：会话刚 `OpenPtySession` 成功时远端还没就绪，
+   `SendData` 甚至可能返回 0 但数据进不到 guest。
+   可靠的就绪信号是"远端首次产生输出"（欢迎信息/提示符），
+   实测 `shell` 需要先等到它再开始透传。
+
+另外，`shell` 只做数据面：本地 tty 切 raw + 双向字节透传 + SIGWINCH 同步窗口尺寸，
+不做任何行缓冲/回显/退格处理 —— 行规程属于远端 bash/readline 的职责。
+（早期版本在本地实现了残缺的行规程，导致整行重复下发、`uname -r` 被粘连成
+`uname -runame -r` 之类的现象。）
 

@@ -109,6 +109,16 @@ void feedOutput(const char *data) {
     g_output += data;
 }
 
+bool waitForAnyOutput(int timeoutMs) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    std::unique_lock<std::mutex> lk(g_outMutex);
+    while (g_output.empty()) {
+        if (g_closed.load()) return false;
+        if (g_outCv.wait_until(lk, deadline) == std::cv_status::timeout) return !g_output.empty();
+    }
+    return true;
+}
+
 bool waitForOutput(const char *needle, int timeoutMs) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     std::unique_lock<std::mutex> lk(g_outMutex);

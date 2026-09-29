@@ -97,6 +97,8 @@ bool sessionClosed();
 int lastExitCode();
 //: 重置会话状态（每次 exec/shell 前调用）
 void resetSessionState();
+//: 等待远端首次产生输出（PTY 通道真正就绪的信号；过早发送会被丢弃）
+bool waitForAnyOutput(int timeoutMs);
 
 }  // namespace hvm
 

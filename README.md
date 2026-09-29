@@ -90,13 +90,17 @@ VERSION="24.03 (LTS-SP3)"
 hu60
 
 $ ./hvm-cli exec 'hostname; ip -4 addr show | grep inet'   # 任意命令
-$ ./hvm-cli shell                                          # 交互式 shell
+$ ./hvm-cli shell                                          # 交互式 shell（纯字节透传）
 $ ./hvm-cli pty-selftest                                   # 通道自检
 dlopen=ok;manager=ok;open=ok;send=ok
 ```
 
 `exec` 的退出码即远端命令的退出码；`--json` 输出 `{"stdout":...,"exitCode":N}`，
 便于脚本消费。实测环境：openEuler 24.03 LTS-SP3 / kernel 6.6.0 / 172.16.105.2。
+
+`shell` 不做任何行规程：本地 tty 切 raw 后**双向透传字节**，行编辑、回显、
+历史、补全、Ctrl-C/Ctrl-D 全部由远端 bash/readline 处理；
+CLI 只额外负责把本地窗口尺寸变化同步给远端（SIGWINCH → `SetWinSize`）。
 
 该库没有公开头文件，`OhPtyConfig`、回调等结构是从二进制里恢复出来的
 （见 [docs/api-notes.md](docs/api-notes.md#7-fusion-pty-通道)）。

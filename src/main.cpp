@@ -4,6 +4,8 @@
 // 不需要 Python、不需要 root、不需要 HAP。
 #include <cstdint>
 #include <cstdio>
+#include <poll.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 #include <cstdlib>
@@ -172,6 +174,22 @@ Args parse(int argc, char **argv, int from) {
     }
     return a;
 }
+
+//: 本地终端窗口尺寸（拿不到时退回 24x80）
+hvm::PtyWinSize localWinSize() {
+    hvm::PtyWinSize ws;
+    struct winsize w {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_row != 0) {
+        ws.rows = w.ws_row;
+        ws.cols = w.ws_col;
+        ws.xpixel = w.ws_xpixel;
+        ws.ypixel = w.ws_ypixel;
+    }
+    return ws;
+}
+
+volatile sig_atomic_t g_winch = 0;
+extern "C" void hvmOnWinch(int) { g_winch = 1; }
 
 //: 去掉 ANSI 转义序列，便于脚本消费
 std::string stripAnsi(const std::string &in) {
@@ -502,48 +520,91 @@ int run(int argc, char **argv) {
         return exitCode == 0 ? 0 : (exitCode > 0 ? exitCode : 1);
     }
     if (cmd == "shell" || cmd == "vm-shell") {
+        // 只做数据收发：行规程（行编辑/回显/历史/补全/Ctrl-C）全部交给远端 bash。
+        // 本地 tty 切 raw 是为了不产生第二份回显、也不让本地 tty 提前吃掉控制字符。
         hvm::PtyConfig pcfg;
-        pcfg.winSize = {40, 120, 0, 0};
+        pcfg.winSize = localWinSize();
         hvm::PtySession pty;
         int rc = pty.open(pcfg, [](const char *d) {
-            fputs(d, stdout);
-            fflush(stdout);
+            size_t n = strlen(d);
+            size_t off = 0;
+            while (off < n) {
+                ssize_t w = write(STDOUT_FILENO, d + off, n - off);
+                if (w <= 0) break;
+                off += static_cast<size_t>(w);
+            }
         });
         if (rc != 0) return fail(cmd, rc, "打开 PTY 会话失败: " + pty.lastError());
-        hvm::waitForOutput("$ ", 20000) || hvm::waitForOutput("# ", 1000);
-        printf("[已连入 openEuler 环境，输入 exit 退出]\n");
+
         struct termios oldt {}, rawt {};
         bool rawOk = tcgetattr(STDIN_FILENO, &oldt) == 0;
         if (rawOk) {
             rawt = oldt;
-            rawt.c_lflag &= ~(ICANON | ECHO);
-            rawt.c_cc[VMIN] = 1;
-            rawt.c_cc[VTIME] = 0;
+            cfmakeraw(&rawt);          // 关掉本地 ICANON/ECHO/ISIG 等所有行规程
             tcsetattr(STDIN_FILENO, TCSANOW, &rawt);
         }
-        std::string line;
-        char ch = 0;
-        while (true) {
-            ssize_t n = read(STDIN_FILENO, &ch, 1);
-            if (n <= 0) break;
-            if (ch == '\n') {
-                // 字符已逐个发送，这里只补回车，避免整行重复下发
-                pty.send("\n");
-                if (line == "exit" || line == "logout") break;
-                line.clear();
-            } else if (ch == 0x04) {  // Ctrl-D
-                pty.send("exit\n");
-                break;
-            } else if (ch == 0x7F || ch == 0x08) {
-                if (!line.empty()) line.pop_back();
-                pty.send("\x7f");
-            } else {
-                line += ch;
-                std::string k(1, ch);
-                pty.send(k);
+        signal(SIGWINCH, hvmOnWinch);
+        // 传输层就绪门：远端还没吐数据时发送会被静默丢弃
+        if (!hvm::waitForAnyOutput(20000) && !hvm::sessionClosed()) {
+            if (rawOk) tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+            pty.close();
+            return fail(cmd, -1, "等待远端就绪超时");
+        }
+        if (g_json) {
+            Json j(cmd);
+            j.num("sessionId", pty.sessionId());
+            printf("%s\n", j.ok().c_str());
+        }
+
+        const bool dbg = getenv("HVM_DEBUG") != nullptr;
+        if (dbg) fprintf(stderr, "[dbg] sessionId=%d closed=%d\n", pty.sessionId(),
+                         hvm::sessionClosed() ? 1 : 0);
+
+        // stdin 结束后不立刻关会话：继续把远端输出抽干，直到远端自己结束
+        // （管道用法下 `... | hvm-cli shell` 里常见的 `exit` 会触发远端关闭）。
+        const int eofWaitSec = [] {
+            const char *v = getenv("HVM_EOF_WAIT");
+            int s = v ? atoi(v) : 10;
+            return s > 0 ? s : 10;
+        }();
+        bool stdinEof = false;
+        auto deadline = std::chrono::steady_clock::now();
+        std::vector<char> buf(4096);
+
+        while (!hvm::sessionClosed()) {
+            if (g_winch) {
+                g_winch = 0;
+                pty.setWinSize(localWinSize());
+            }
+            if (stdinEof) {
+                if (std::chrono::steady_clock::now() >= deadline) break;
+                usleep(100000);
+                continue;
+            }
+            struct pollfd pfd {STDIN_FILENO, POLLIN, 0};
+            int pr = poll(&pfd, 1, 200);
+            if (pr < 0) break;
+            if (pr == 0) continue;
+            ssize_t n = read(STDIN_FILENO, buf.data(), buf.size());
+            if (n <= 0) {
+                stdinEof = true;
+                deadline = std::chrono::steady_clock::now() + std::chrono::seconds(eofWaitSec);
+                continue;
+            }
+            std::string chunk(buf.data(), static_cast<size_t>(n));
+            // 会话刚建立时远端可能还没就绪，发送会失败；重试而不是丢掉输入
+            for (int attempt = 0; attempt < 50; ++attempt) {
+                int src = pty.send(chunk);
+                if (dbg)
+                    fprintf(stderr, "[dbg] send %zu bytes attempt=%d rc=%d closed=%d\n",
+                            chunk.size(), attempt, src, hvm::sessionClosed() ? 1 : 0);
+                if (src == 0) break;
+                if (hvm::sessionClosed()) break;
+                usleep(100000);
             }
         }
         if (rawOk) tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        signal(SIGWINCH, SIG_DFL);
         pty.close();
         return 0;
     }
