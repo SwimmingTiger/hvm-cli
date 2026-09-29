@@ -396,16 +396,15 @@ CheckWinImgPath(175)     Windows 安装镜像判定
 - `hvm-cli` 已内置转换：`/storage/Users/currentUser/<p>` 与
   `file://docs/storage/Users/currentUser/<p>` → `/storage/media/<账号 id>/local/files/Docs/<p>`。
 
-  路径里的那个数字是 **OS 账号 id（不是登录名）**，多账号设备上第二个账号是 101。
-  `hvm-cli` 不写死它，而是按 OpenHarmony 的 uid 编码规则推导：
+  路径里的那个数字是 **OS 账号 id**，本机 HiShell 终端里就是环境变量 `$USER`（实测 = 100）。
+  `hvm-cli` 的取值顺序：
 
-  ```
-  uid = userId * 200000 + appId        →  userId = uid / 200000
-  例：HiShell 的 20020085 / 200000 = 100；第二账号下的应用 202xxxxx → 101
-  ```
+  1. `HVM_USER_ID`（显式覆盖，便于引用别的账号视图下的文件）；
+  2. **`$USER`**（要求纯数字 —— 本机就是 `100`）；
+  3. 回落到 OpenHarmony 的 uid 编码规则推导：`userId = uid / 200000`
+     （HiShell 的 20020085 → 100；第二账号下的应用 202xxxxx → 101）。
 
-  也可用 `HVM_USER_ID=101` 显式覆盖（例如要引用别的账号视图下的文件）。
-  预演时会打印推导结果：`（账号 id=100，由 uid 20020085 / 200000 推导）`。
+  预演时会打印实际取值：`（账号 id=100，取自 $USER（回落到 uid 20020085 / 200000））`。
 
 ### 10.2 为什么另外两种写法不行
 

@@ -309,21 +309,28 @@ std::string humanBytes(int64_t bytes) {
 //: 依据：实测正在安装 Windows 的虚拟机命令行里，光盘就是
 //:   file=/storage/media/100/local/files/Docs/Download/<bundle>/Win11_....iso
 //: 而 /storage/Users/... 与 hmdfs 真实路径都只对 vm_manager 可读、stratovirt 读不了。
-//: 取当前进程所属的 OS 账号 id（= 媒体库视图里的那个数字）。
-//: OpenHarmony 的 uid 编码规则是 uid = userId * 200000 + appId，所以直接整除即可：
-//:   本机 HiShell 的 uid 20020085 → 100；第二个账号下的应用会是 101xxxxx → 101。
-//: 也可以用 HVM_USER_ID 显式覆盖（例如要在别的账号视图下取文件时）。
+//: 取媒体库视图里的那个数字（OS 账号 id）。
+//: 优先读环境变量 USER —— 本机 HiShell 终端里就是 USER=100，正是该数字；
+//: 拿不到或不是纯数字时，按 OpenHarmony 的 uid 编码规则回落：
+//:   uid = userId * 200000 + appId  →  userId = uid / 200000
+//:   （HiShell 的 20020085 → 100；第二账号下的应用 202xxxxx → 101）
+//: HVM_USER_ID 可显式覆盖（例如要引用别的账号视图下的文件）。
 std::string currentUserId() {
     if (const char *env = getenv("HVM_USER_ID")) {
         if (*env != '\0') return env;
     }
-    const uid_t uid = getuid();
-    const std::string derived = std::to_string(static_cast<unsigned>(uid) / 200000u);
-    if (derived == "0") {
-        // 理论上不该出现（系统进程 uid 很小）；回落到第一个账号
-        return "100";
+    if (const char *user = getenv("USER")) {
+        bool allDigits = (*user != '\0');
+        for (const char *p = user; *p != '\0'; ++p) {
+            if (*p < '0' || *p > '9') {
+                allDigits = false;
+                break;
+            }
+        }
+        if (allDigits) return user;
     }
-    return derived;
+    const std::string derived = std::to_string(static_cast<unsigned>(getuid()) / 200000u);
+    return derived == "0" ? "100" : derived;
 }
 
 std::string toServicePath(const std::string &in) {
@@ -613,7 +620,7 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         std::string t = toServicePath(bios);
         if (t != bios) {
             if (!g_json)
-                printf("（路径转换）%s\n           → %s\n           （账号 id=%s，由 uid %u / 200000 推导）\n",
+                printf("（路径转换）%s\n           → %s\n           （账号 id=%s，取自 $USER（回落到 uid %u / 200000））\n",
                        bios.c_str(), t.c_str(), currentUserId().c_str(),
                        static_cast<unsigned>(getuid()));
             bios = t;

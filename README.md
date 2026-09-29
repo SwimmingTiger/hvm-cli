@@ -128,9 +128,10 @@ if=none,id=unattend,format=raw,media=cdrom,readonly=true,file=/storage/media/100
 `hvm-cli` 现在会自动把 `/storage/Users/currentUser/...` 或
 `file://docs/storage/Users/currentUser/...` 转换成该形式。
 
-路径里的数字是 **OS 账号 id**（多账号设备上第二个账号是 101），不是登录名。
-工具按 `userId = uid / 200000` 推导（HiShell 的 uid 20020085 → 100），
-也可用 `HVM_USER_ID` 覆盖；预演时会打印推导出的账号 id。
+路径里的数字是 **OS 账号 id**，本机 HiShell 终端里就是环境变量 **`$USER`（=100）**。
+工具优先直接读 `$USER`（要求纯数字），拿不到时回落到 `uid / 200000` 推导
+（HiShell 的 20020085 → 100；第二账号下的应用 202xxxxx → 101），
+也可用 `HVM_USER_ID` 显式覆盖；预演时会打印实际取值。
 
 磁盘**不需要**自己准备 qcow2 —— 框架会按 `CfgInfo.diskSize` 自行创建：
 
