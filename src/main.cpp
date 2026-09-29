@@ -138,9 +138,9 @@ void usage() {
         "  rgm-status [名字]       查询 RGM 镜像状态（GetRgmImageStatusFromVm）\n"
         "  recover-user-data <路径>  恢复用户数据（RecoverUserData）\n"
         "  autopause <0|1|3|10|15|30>  自动暂停时间（0=关闭，其余为分钟）\n"
-        "  net mode bridge|nat [接口]  网络模式（MODE_BRIDGE=0 / MODE_NAT=1）\n"
-        "  net ports                  查询 NAT 端口转发表（GetPortForwardForNat）\n"
-        "  net localhost-ports        查询本机转发表（GetLocalhostForwardFromVmToHost）\n"
+
+
+
         "  linux-data-delete       删除 Linux 数据镜像\n"
         "  rgm-image-delete <镜像> 删除 RGM 镜像（DeleteRgmImageFromVm）\n"
 
@@ -184,7 +184,15 @@ void usage() {
         "  share add <宿主路径> <客机路径> | share remove <宿主路径> | share setup\n"
         "\n"
         "网络:\n"
-        "  net ip | net proxy | net share-on | net share-off | net dns-on | net dns-off\n"
+        "  net ip                     客户机 IPv4 地址\n"
+        "  net proxy                  查询宿主网络代理状态\n"
+        "  net share-on | share-off   网络共享开关（SwitchVmNetworkShare）\n"
+        "  net dns-on   | dns-off     DNS 自动同步开关（SetDnsAutoSyncEnabled）\n"
+        "  net mode bridge|nat [接口] 网络模式（MODE_BRIDGE=0 / MODE_NAT=1）\n"
+        "  net ports                  查询 NAT 端口转发表（GetPortForwardForNat）\n"
+        "  net localhost-ports        查询本机转发表（GetLocalhostForwardFromVmToHost）\n"
+        "  net proxy-status-on|proxy-status-off   设置宿主网络代理状态（SetVmHostNetProxyStatus）\n"
+        "  net proxy-auto-on|proxy-auto-off       代理自动同步开关（SetProxyAutoSyncEnabled）\n"
         "\n"
         "磁盘:\n"
         "  disk capacity | disk path | disk size | disk expand <GB> | disk delete-data\n"
