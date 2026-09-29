@@ -1,7 +1,7 @@
 // main.cpp —— hvm-cli 命令行入口
 //
 // 纯 C++ 实现：直接使用系统自带的 libvm_manager_kits.z.so，
-// 不需要 Python、不需要 root、不需要 HAP。
+// 不需要 root、不需要 HAP。
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>

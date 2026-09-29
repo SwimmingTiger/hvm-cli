@@ -86,10 +86,10 @@ isLinuxFusionService:%d, isHiShellHap:%d, isOpenEulerHap:%d
 - `OHOS::sptr<T>` 是单指针智能指针，`GetInstance()` 的返回值可直接当
   成员函数的 `this` 用。
 - 该库被 **strip**（只有 `.dynsym`），`CfgInfo` 等辅助类没有导出符号。
-- **重要坑**：把 `libvm_manager_kits.z.so` 用 `dlopen()` 加载进 *Python 进程*
-  会在库的静态初始化阶段段错误（`ctypes.CDLL` 直接崩）；
+- **重要坑**：把 `libvm_manager_kits.z.so` 用 `dlopen()` 加载进*非原生宿主*
+  （例如脚本运行时）会在库的静态初始化阶段段错误；
   同一个库在独立可执行文件里加载、调用均正常。
-  因此本工具是**独立进程 CLI**，而不是 ctypes 模块。
+  因此本工具做成**独立可执行文件**，而不是可被任意宿主加载的插件。
 
 ## 5. 已知返回码
 
@@ -103,15 +103,25 @@ isLinuxFusionService:%d, isHiShellHap:%d, isOpenEulerHap:%d
 状态码（`GetVmStatus`）服务端**没有把枚举名编进二进制**，目前只实测到
 `0`（无虚拟机运行）。其余取值需在有虚拟机运行时逐个观测补全。
 
-## 6. 尚未完成：启动/创建虚拟机
+## 6. 创建/启动虚拟机：线上格式与引擎侧线索
 
-`StartVm(name, sptr<CfgInfo>)` / `CreateVm(name, name, sptr<CfgInfo>)`
-需要一个 `CfgInfo` 对象，而：
+`CreateVm(vmName, imagePath, sptr<CfgInfo>)` / `StartVm(vmName, sptr<CfgInfo>)`
+需要 `CfgInfo`。客户端 kit 被 strip、该类没有导出符号，因此改为按逆向出的
+**内联构造序列**手工构造（配方与实测见第 9 节）。
 
-- 客户端 kit 被 strip，`CfgInfo` 没有导出符号（构造/设置字段无从 dlsym）；
-- 需要逆向 `VmManagerProxy::StartVm` 的 parcel 序列化顺序，
-  或从服务端 `Engine::GetOHStartVmCmd`（由 `CfgInfo` 生成 stratoVirt 命令行）
-  反推字段集合。
+服务端 `HandleCreateVm` 的线上格式（`libvm_manager.z.so`，实测日志核对过）：
+
+```
+ReadString  vmName        → 校验长度与 ".."，非法回 401
+ReadInt32   是否有 CfgInfo → 0 或反序列化失败回 404
+[CfgInfo]   CfgInfo::Unmarshalling
+ReadString  imagePath     → 读取失败回 402
+→ VmManager::CreateVm(vmName, imagePath, cfg) 的返回值写回
+```
+
+`GetCheckPathInfo` / `CheckFiles` 会校验：`CfgInfo+32`（biosPath）与 `imagePath`
+必须存在且可读（`access(R_OK)`），随后 `DetectIsoType` / `GetQcowState` 判定
+镜像必须是 **ISO 或 qcow2**。
 
 已知服务端由 `CfgInfo` 生成的命令行包含（来自 `libvm_manager.z.so` 字符串）：
 
@@ -148,18 +158,13 @@ blockdev-snapshot-internal-sync  trace-get-state
 cat /system/profile/vm_manager.json
 # 客户端导出符号
 nm -D --defined-only /system/lib64/libvm_manager_kits.z.so | grep VmManagerClientWrapper
-# 接口描述符（UTF-16）
-python3 - <<'EOF'
-import re
-d=open('/system/lib64/libvm_manager.z.so','rb').read()
-print({m.group().decode('utf-16le') for m in re.finditer(rb'(?:[\x20-\x7e]\x00){6,}', d)
-       if b'VmManager' in m.group()})
-EOF
+# 接口描述符（UTF-16LE 常量）：转码后过滤
+iconv -c -f UTF-16LE -t UTF-8 /system/lib64/libvm_manager.z.so | grep -ao 'OHOS\.[A-Za-z.]*' | sort -u
 # 实测调用
 ./hvm-cli selftest && ./hvm-cli info
 ```
 
-## 7. fusion PTY 通道（`openeuler` 命令）
+## 8. fusion PTY 通道（`openeuler` 命令）
 
 HiShell 的"openEuler 标签页 / 连接 openEuler 执行命令"用的不是 vm_manager，而是
 **LinuxFusion PTY**（融合开发引擎，内部代号 **RGM**）：
@@ -238,7 +243,7 @@ void onStatus(void *session, int sessionId, int status);        // 1=就绪 2=�
 `uname -runame -r` 之类的现象。）
 
 
-## 8. CfgInfo 手工构造（实测记录）
+## 9. CfgInfo 手工构造（实测记录）
 
 `vm create` 已打通到服务端业务校验，过程与踩坑记录如下。
 
