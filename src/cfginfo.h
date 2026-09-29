@@ -85,6 +85,27 @@ class ChannelInfoBuilder {
     std::string error_;
 };
 
+//: 手工构造 PortInfoList（端口转发条目表），并持有其 sptr 引用
+class PortInfoListBuilder {
+  public:
+    explicit PortInfoListBuilder(const std::vector<std::array<std::uint32_t, 3>> &entries);
+    ~PortInfoListBuilder();
+    PortInfoListBuilder(const PortInfoListBuilder &) = delete;
+    PortInfoListBuilder &operator=(const PortInfoListBuilder &) = delete;
+
+    bool ok() const { return obj_ != nullptr; }
+    const std::string &lastError() const { return error_; }
+    std::string dump() const;
+    void *raw() const { return obj_; }
+    //: 传给接口的 sptr 值（对象的地址，已加引用计数）
+    void *sptrValue() const { return holder_; }
+
+  private:
+    void *obj_ = nullptr;
+    void *holder_ = nullptr;
+    std::string error_;
+};
+
 }  // namespace hvm
 
 #endif  // HVM_CFGINFO_H

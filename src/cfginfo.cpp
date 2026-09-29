@@ -238,6 +238,66 @@ std::string ChannelInfoBuilder::dump() const {
     return buf;
 }
 
+PortInfoListBuilder::PortInfoListBuilder(
+    const std::vector<std::array<std::uint32_t, 3>> &entries) {
+    NapiLib &lib = napiLib();
+    if (!lib.ok()) {
+        const char *e = dlerror();
+        error_ = std::string("加载 ") + kNapiLibName + " 失败: " + (e ? e : "未知原因");
+        return;
+    }
+    if (entries.size() > abi::portinfo::kMaxEntries) {
+        error_ = "条目数超过服务端上限(30)";
+        return;
+    }
+    obj_ = ::operator new(abi::portinfo::kSize, std::nothrow);
+    if (obj_ == nullptr) {
+        error_ = "分配 PortInfoList(0x38) 失败";
+        return;
+    }
+    std::memset(obj_, 0, abi::portinfo::kSize);
+    char *p = static_cast<char *>(obj_);
+
+    auto refBaseCtor = reinterpret_cast<CtorFn>(dlsym(RTLD_DEFAULT, "_ZN4OHOS7RefBaseC2Ev"));
+    if (refBaseCtor == nullptr) {
+        error_ = "找不到 RefBase 构造函数";
+        return;
+    }
+    refBaseCtor(p + abi::portinfo::kRefBaseOffset);
+    *reinterpret_cast<void **>(p) = lib.at(abi::portinfo::kVtable);
+
+    // std::vector<PortInfo>：begin/end/cap 依次位于 +16/+24/+32
+    auto *vec = new std::vector<std::array<std::uint32_t, 3>>(entries);
+    *reinterpret_cast<void **>(p + abi::portinfo::kVectorBegin) = vec;
+    error_.clear();
+
+    // sptr：把对象地址交给调用方，并补一次强引用
+    holder_ = obj_;
+    auto incRef = reinterpret_cast<void (*)(void *, void *)>(
+        dlsym(RTLD_DEFAULT, "_ZN4OHOS7RefBase12IncStrongRefEPKv"));
+    if (incRef != nullptr) {
+        void *holder = nullptr;
+        incRef(p + abi::portinfo::kRefBaseOffset, &holder);
+    }
+}
+
+PortInfoListBuilder::~PortInfoListBuilder() {
+    // 交给服务端 marshal 完成后即可释放（进程随即退出，不再回收）
+    obj_ = nullptr;
+    holder_ = nullptr;
+}
+
+std::string PortInfoListBuilder::dump() const {
+    if (!obj_) return error_.empty() ? "(未构造)" : error_;
+    const char *p = static_cast<const char *>(obj_);
+    const auto *vec = *reinterpret_cast<const std::vector<std::array<std::uint32_t, 3>> *const *>(
+        p + abi::portinfo::kVectorBegin);
+    char buf[256];
+    snprintf(buf, sizeof buf, "PortInfoList@%p vptr=%p sptr=%p 条目=%zu", obj_,
+             *reinterpret_cast<void *const *>(p), holder_, vec ? vec->size() : 0);
+    return buf;
+}
+
 std::string CfgInfoBuilder::dump() const {
     if (!obj_) return error_.empty() ? "(未构造)" : error_;
     const char *p = static_cast<const char *>(obj_);

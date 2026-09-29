@@ -137,6 +137,22 @@ class Client {
     int tabletSwitchChanged(int v);
     int lockGuest();
     int lxOtaHandle();
+    int handleLxSnapshot(const std::string &vm, const std::string &name, int32_t op);
+    int rgmImageStatusFromVm(const std::string &name);
+    int recoverUserData(const std::string &vm, const std::string &path);
+    //: AutoPauseTime 是 32 位枚举（CLOSE=0/1/3/10/15/30 分钟），按引用传
+    int setAutoPauseTime(const std::string &vm, int32_t minutes);
+    //: NetMode 是 32 位枚举（MODE_BRIDGE=0 / MODE_NAT=1），按引用传
+    int setVmNetMode(const std::string &vm, int32_t mode, const std::string &iface);
+    //: NAT 端口转发表的读取/设置；条目为 3 个 uint32（服务端 Marshalling 顺序）
+    int getPortForwardForNat(const std::string &vm,
+                             std::vector<std::array<std::uint32_t, 3>> &out);
+    int setPortForwardForNat(const std::string &vm, uint32_t arg,
+                             const std::vector<std::array<std::uint32_t, 3>> &entries);
+    int getLocalhostForwardFromVmToHost(const std::string &vm,
+                                        std::vector<std::array<std::uint32_t, 3>> &out);
+    int setLocalhostForwardFromVmToHost(const std::string &vm, uint32_t arg,
+                                        const std::vector<std::array<std::uint32_t, 3>> &entries);
 
     // ------------------------------------------------------------ 电源
     int forceStop(const std::string &vm);

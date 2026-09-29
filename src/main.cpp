@@ -132,6 +132,13 @@ void usage() {
         "  pause / resume [名字]   暂停 / 恢复虚拟机\n"
         "  lock-guest              锁定客户机（LockGuest）\n"
         "  lx-ota                  Linux 环境 OTA（LxOtaHandle）\n"
+        "  lx-snapshot <名> <op>   Linux 虚拟机快照（HandleLxSnapshot）\n"
+        "  rgm-status [名字]       查询 RGM 镜像状态（GetRgmImageStatusFromVm）\n"
+        "  recover-user-data <路径>  恢复用户数据（RecoverUserData）\n"
+        "  autopause <0|1|3|10|15|30>  自动暂停时间（0=关闭，其余为分钟）\n"
+        "  net mode bridge|nat [接口]  网络模式（MODE_BRIDGE=0 / MODE_NAT=1）\n"
+        "  net ports                  查询 NAT 端口转发表（GetPortForwardForNat）\n"
+        "  net localhost-ports        查询本机转发表（GetLocalhostForwardFromVmToHost）\n"
         "  linux-data-delete       删除 Linux 数据镜像\n"
         "  rgm-image-delete <镜像> 删除 RGM 镜像（DeleteRgmImageFromVm）\n"
         "  share-volumes           列出全部共享卷（GetAllSharedVolume）\n"
@@ -355,6 +362,42 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
         return 0;
     }
     if (cmd == "lock-guest") return report(c.lockGuest(), "锁定客户机");
+    if (cmd == "lx-snapshot") {
+        if (a.pos.size() < 2) {
+            fprintf(stderr, "lx-snapshot <快照名> <操作码>\n");
+            return 2;
+        }
+        return report(c.handleLxSnapshot(vm, a.pos[0], atoi(a.pos[1].c_str())),
+                      "处理 Linux 虚拟机快照");
+    }
+    if (cmd == "rgm-status") {
+        std::string name = a.pos.empty() ? vm : a.pos[0];
+        int st = c.rgmImageStatusFromVm(name);
+        if (st == OHOS_VM_ERR_SYMBOL_MISSING) return fail(cmd, st, "GetRgmImageStatusFromVm 失败");
+        if (g_json) {
+            Json j(cmd);
+            j.str("image", name).num("status", st);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s 的 RGM 镜像状态: %d\n", name.c_str(), st);
+        }
+        return 0;
+    }
+    if (cmd == "recover-user-data") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "recover-user-data <路径>\n");
+            return 2;
+        }
+        return report(c.recoverUserData(vm, a.pos[0]), "恢复用户数据");
+    }
+    if (cmd == "autopause") {
+        if (a.pos.empty()) {
+            fprintf(stderr, "autopause <0|1|3|10|15|30>   （0=关闭，其余为分钟数）\n");
+            return 2;
+        }
+        int32_t m = static_cast<int32_t>(atoi(a.pos[0].c_str()));
+        return report(c.setAutoPauseTime(vm, m), "设置自动暂停时间");
+    }
     if (cmd == "lx-ota") return report(c.lxOtaHandle(), "Linux 环境 OTA");
     if (cmd == "linux-data-delete") return report(c.deleteLinuxDataImage(), "删除 Linux 数据镜像");
     if (cmd == "rgm-image-delete") {
@@ -931,6 +974,8 @@ int run(int argc, char **argv) {
 
     if (cmd == "vm") return cmdVm(c, a.pos);
     if (cmd == "pause" || cmd == "resume" || cmd == "lock-guest" || cmd == "lx-ota" ||
+        cmd == "lx-snapshot" || cmd == "rgm-status" || cmd == "recover-user-data" ||
+        cmd == "autopause" ||
         cmd == "linux-data-delete" || cmd == "rgm-image-delete" || cmd == "share-volumes" ||
         cmd == "linux-path" || cmd == "gallery-share" || cmd == "guest-disk-share" ||
         cmd == "pasteboard" || cmd == "buffer" || cmd == "perf" || cmd == "perf-ex" ||
@@ -1236,6 +1281,35 @@ int run(int argc, char **argv) {
         NEED_ARGS(1, "hvm-cli net ip|proxy|share-on|share-off|dns-on|dns-off|"
                       "proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off");
         const std::string &act = a.pos[0];
+        if (act == "ports" || act == "localhost-ports") {
+            std::vector<std::array<std::uint32_t, 3>> v;
+            int rc = (act == "ports") ? c.getPortForwardForNat(a.vm, v)
+                                      : c.getLocalhostForwardFromVmToHost(a.vm, v);
+            if (rc != 0)
+                return fail(cmd, rc, act == "ports" ? "GetPortForwardForNat 失败"
+                                                    : "GetLocalhostForwardFromVmToHost 失败");
+            if (g_json) {
+                Json j(cmd);
+                j.num("count", v.size());
+                printf("%s\n", j.ok().c_str());
+            }
+            printf("条目数 %zu（每行：字段1 字段2 字段3）\n", v.size());
+            for (const auto &e : v)
+                printf("  %u  %u  %u\n", e[0], e[1], e[2]);
+            return 0;
+        }
+        if (act == "mode") {
+            if (a.pos.size() < 2) {
+                fprintf(stderr, "net mode bridge|nat [接口名]\n");
+                return 2;
+            }
+            int32_t mode = (a.pos[1] == "nat" || a.pos[1] == "1") ? 1 : 0;   // MODE_NAT=1, MODE_BRIDGE=0
+            std::string iface = a.pos.size() > 2 ? a.pos[2] : std::string();
+            int rc = c.setVmNetMode(a.vm, mode, iface);
+            if (rc != 0) return fail(cmd, rc, "SetVmNetMode 失败");
+            printf("已设置网络模式: %s\n", mode == 1 ? "NAT" : "桥接");
+            return 0;
+        }
         if (act == "proxy-status-on" || act == "proxy-status-off") {
             int rc = c.setVmHostNetProxyStatus(a.vm, act == "proxy-status-on");
             if (rc != 0) return fail(cmd, rc, "SetVmHostNetProxyStatus 失败");

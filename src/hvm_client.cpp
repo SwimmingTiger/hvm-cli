@@ -1,5 +1,9 @@
 // hvm_client.cpp —— 虚拟机客户端封装实现
 #include "hvm_client.h"
+#include "cfginfo.h"   // PortInfoListBuilder
+#include "ohos/vm_manager_service/cfg_info.h"
+
+namespace abi = OHOS::VmManagerService::cfg_info;
 
 #include "ohos/vm_manager_service/vm_manager_kits.syms.h"
 
@@ -543,6 +547,117 @@ int Client::lxOtaHandle() {
     auto f = resolve<Fn>("LxOtaHandle");
     if (f == nullptr) return kErrNoSymbol;
     try { return f(instance_); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::handleLxSnapshot(const std::string &vm, const std::string &name, int32_t op) {
+    using Fn = int (*)(void *, const std::string &, const std::string &, int32_t);
+    auto f = resolve<Fn>("HandleLxSnapshot");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, name, op); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::rgmImageStatusFromVm(const std::string &name) {
+    using Fn = int (*)(void *, const std::string &);
+    auto f = resolve<Fn>("GetRgmImageStatusFromVm");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, name); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::recoverUserData(const std::string &vm, const std::string &path) {
+    using Fn = int (*)(void *, const std::string &, const std::string &);
+    auto f = resolve<Fn>("RecoverUserData");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, path); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setAutoPauseTime(const std::string &vm, int32_t minutes) {
+    // AutoPauseTime 是 32 位枚举，按 const& 传递 → 直接给地址
+    using Fn = int (*)(void *, const std::string &, const int32_t *);
+    auto f = resolve<Fn>("SetAutoPauseTime");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, &minutes); } catch (...) { return kErrNoSymbol; }
+}
+
+int Client::setVmNetMode(const std::string &vm, int32_t mode, const std::string &iface) {
+    using Fn = int (*)(void *, const std::string &, const int32_t *, const std::string &);
+    auto f = resolve<Fn>("SetVmNetMode");
+    if (f == nullptr) return kErrNoSymbol;
+    try { return f(instance_, vm, &mode, iface); } catch (...) { return kErrNoSymbol; }
+}
+
+//: 从 GetXxx 返回的 sptr<PortInfoList> 里取出条目（vector 位于对象 +16）
+static std::vector<std::array<std::uint32_t, 3>> readPortInfoVector(void *listObj) {
+    std::vector<std::array<std::uint32_t, 3>> out;
+    if (listObj == nullptr) return out;
+    const char *p = static_cast<const char *>(listObj);
+    using Vec = std::vector<std::array<std::uint32_t, 3>>;
+    const auto *vec = *reinterpret_cast<Vec *const *>(p + abi::portinfo::kVectorBegin);
+    if (vec == nullptr) return out;
+    out = *vec;
+    return out;
+}
+
+int Client::getPortForwardForNat(const std::string &vm,
+                                 std::vector<std::array<std::uint32_t, 3>> &out) {
+    using Fn = int (*)(void *, const std::string &, void **);
+    auto f = resolve<Fn>("GetPortForwardForNat");
+    if (f == nullptr) return kErrNoSymbol;
+    void *slot = nullptr;   // sptr<PortInfoList>& —— 传槽位地址
+    int rc = kErrNoSymbol;
+    try {
+        rc = f(instance_, vm, &slot);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+    if (rc != 0) return rc;
+    out = readPortInfoVector(slot);
+    return 0;
+}
+
+int Client::setPortForwardForNat(const std::string &vm, uint32_t arg,
+                                 const std::vector<std::array<std::uint32_t, 3>> &entries) {
+    hvm::PortInfoListBuilder b(entries);
+    if (!b.ok()) return kErrNoSymbol;
+    using Fn = int (*)(void *, const std::string &, uint32_t, void *);
+    auto f = resolve<Fn>("SetPortForwardForNat");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, vm, arg, b.sptrValue());
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::getLocalhostForwardFromVmToHost(
+    const std::string &vm, std::vector<std::array<std::uint32_t, 3>> &out) {
+    using Fn = int (*)(void *, const std::string &, void **);
+    auto f = resolve<Fn>("GetLocalhostForwardFromVmToHost");
+    if (f == nullptr) return kErrNoSymbol;
+    void *slot = nullptr;
+    int rc = kErrNoSymbol;
+    try {
+        rc = f(instance_, vm, &slot);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+    if (rc != 0) return rc;
+    out = readPortInfoVector(slot);
+    return 0;
+}
+
+int Client::setLocalhostForwardFromVmToHost(
+    const std::string &vm, uint32_t arg,
+    const std::vector<std::array<std::uint32_t, 3>> &entries) {
+    hvm::PortInfoListBuilder b(entries);
+    if (!b.ok()) return kErrNoSymbol;
+    using Fn = int (*)(void *, const std::string &, uint32_t, void *);
+    auto f = resolve<Fn>("SetLocalhostForwardFromVmToHost");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, vm, arg, b.sptrValue());
+    } catch (...) {
+        return kErrNoSymbol;
+    }
 }
 
 // ---------------------------------------------------------------------- 电源

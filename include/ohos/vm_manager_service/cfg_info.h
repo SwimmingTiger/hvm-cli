@@ -212,6 +212,28 @@ constexpr std::uint32_t kTypeSerial1 = 1;  // ChannelType.SERIAL1（推测）
 
 }  // namespace channel
 
+/* ======================================================================
+ * PortInfoList —— NAT / 本机端口转发的条目表
+ *
+ * 布局取自 [S] PortInfoList::Marshalling / Unmarshalling：
+ *   p = operator new(0x38); memset
+ *   RefBase::RefBase(p + 40); *(void**)(p + 48) = 0
+ *   std::vector<PortInfo> 位于 +16（begin）/ +24（end）/ +32（cap）
+ *   *(void**)p = baseN + 0xB4A90        ; 主 vtable 地址点
+ *   Marshalling 写：uint32 条目数，然后每条 3 个 uint32
+ *   （Unmarshalling 侧限制条目数 <= 0x1E = 30）
+ * ====================================================================== */
+namespace portinfo {
+
+constexpr std::size_t kSize = 0x38;
+constexpr std::uintptr_t kVtable = 0xB4A90;
+constexpr std::size_t kRefBaseOffset = 40;
+constexpr std::size_t kVectorBegin = 16;   // std::vector<PortInfo>
+constexpr std::size_t kPortInfoSize = 12;  // 3 × uint32
+constexpr std::uint32_t kMaxEntries = 0x1E;
+
+}  // namespace portinfo
+
 /* ------------------------------------------------------------ 序列化 */
 
 /**
