@@ -321,6 +321,31 @@ int Client::exportVmDiskImage(const std::string &name, const std::string &src,
     }
 }
 
+int Client::sendDataToVm(const std::string &vm, const std::vector<uint8_t> &data, int arg,
+                         const void *ch) {
+    using Fn = int (*)(void *, const std::string &, const std::vector<uint8_t> &, int,
+                       const void *);
+    auto f = resolve<Fn>("SendDataToVm");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, vm, data, arg, ch);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
+int Client::recvDataFromVm(const std::string &vm, std::vector<uint8_t> &data, int arg,
+                           const void *ch) {
+    using Fn = int (*)(void *, const std::string &, std::vector<uint8_t> &, int, const void *);
+    auto f = resolve<Fn>("RecvDataFromVm");
+    if (f == nullptr) return kErrNoSymbol;
+    try {
+        return f(instance_, vm, data, arg, ch);
+    } catch (...) {
+        return kErrNoSymbol;
+    }
+}
+
 int Client::stopVm(const std::string &name, bool clean) {
     using Fn = int (*)(void *, const std::string &, bool);
     auto f = resolve<Fn>("StopVm");

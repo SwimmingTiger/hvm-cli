@@ -97,6 +97,13 @@ class Client {
     //: 反向：把虚拟机磁盘导出到用户可访问的位置（同样要求 MigrationOptions 非空）
     int exportVmDiskImage(const std::string &name, const std::string &src,
                           const std::string &dst, bool isRaw, void *opts);
+    // ------------------------------------------------------------ 主机↔客户机通道
+    //: 向客户机通道写数据；ch 为 ChannelInfoBuilder 构造的对象（按引用传，直接给地址）
+    int sendDataToVm(const std::string &vm, const std::vector<uint8_t> &data, int arg,
+                     const void *ch);
+    //: 从客户机通道读数据
+    int recvDataFromVm(const std::string &vm, std::vector<uint8_t> &data, int arg,
+                       const void *ch);
     int stopVm(const std::string &name, bool clean);
 
     // ------------------------------------------------------------ 电源

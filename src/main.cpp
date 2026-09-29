@@ -115,6 +115,8 @@ void usage() {
         "  vm ctor   [选项]        仅构造 CfgInfo 并打印（验证用，不调服务）\n"
         "  vm create --name N --image P [选项] [--apply]\n"
         "  vm start  --name N [选项] [--apply]\n"
+        "  vm serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
+        "  vm serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
         "  vm range                查询可用的 CPU / 内存范围（服务端校验依据）\n"
         "  vm import --name N --src SRC --dst DST [--apply] 让服务端拷贝文件（搬 ISO）\n"
         "  vm mount-cd   --name N --image X.iso [--apply]   挂载安装光盘\n"
@@ -315,6 +317,10 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     bool partition = false, dynMem = false, apply = false;
     bool keepSnapshots = false, forceImport = false;
     std::string password;
+    std::string chanName = "winbox_serial0";
+    unsigned chanType = 0;
+    int chanArg = 0;
+    std::string dataArg;
 
     for (std::size_t i = 1; i < pos.size(); ++i) {
         const std::string &k = pos[i];
@@ -336,6 +342,10 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         else if (k == "--disk-gb") disk = atoi(v.c_str()) * 1024; // 便捷：按 GB 输入
         else if (k == "--start-type") startType = atoi(v.c_str());
         else if (k == "--password") password = v;
+        else if (k == "--chan") chanName = v;
+        else if (k == "--type") chanType = static_cast<unsigned>(atoi(v.c_str()));
+        else if (k == "--arg") chanArg = atoi(v.c_str());
+        else if (k == "--data") dataArg = v;
         else { fprintf(stderr, "未知选项: %s\n", k.c_str()); return 2; }
     }
 
@@ -375,6 +385,45 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (!bios.empty()) cfg.setBiosPath(bios);
     if (!enhance.empty()) cfg.setEnhanceFilePath(enhance);
     cfg.setStartType(startType);
+
+    if (act == "serial-read" || act == "serial-write") {
+        // 主机↔客户机通道（virtio-serial）。默认通道名取自虚拟机命令行里的
+        // winbox_serial0（nr=1，对应 uds/serial0.sock）
+        if (name.empty()) {
+            fprintf(stderr, "%s 需要 --name <虚拟机名>\n", act.c_str());
+            return 2;
+        }
+        hvm::ChannelInfoBuilder ch(chanType, chanName);
+        if (!ch.ok()) return fail("vm " + act, -1, "构造 ChannelInfo 失败: " + ch.lastError());
+        if (!g_json) printf("%s\n", ch.dump().c_str());
+        if (act == "serial-write") {
+            if (dataArg.empty()) {
+                fprintf(stderr, "serial-write 需要 --data <文本>\n");
+                return 2;
+            }
+            std::vector<uint8_t> buf(dataArg.begin(), dataArg.end());
+            int rc = c.sendDataToVm(name, buf, chanArg, ch.raw());
+            if (rc != 0)
+                return fail("vm serial-write", rc,
+                            std::string("SendDataToVm 返回: ") + ohos_vm_error_name(rc));
+            printf("已发送 %zu 字节\n", buf.size());
+            return 0;
+        }
+        // 服务端要求缓冲区非空（RecvDataFromVm:1048 "data size invalid."），
+        // 且返回值里会带实际读到的长度
+        const std::size_t want = (chanArg > 0) ? static_cast<std::size_t>(chanArg) : 4096;
+        std::vector<uint8_t> buf(want, 0);
+        int rc = c.recvDataFromVm(name, buf, chanArg, ch.raw());
+        if (rc != 0)
+            return fail("vm serial-read", rc,
+                        std::string("RecvDataFromVm 返回: ") + ohos_vm_error_name(rc));
+        printf("收到 %zu 字节:\n", buf.size());
+        // 先按可打印文本显示，再给一份 hex
+        std::string text(buf.begin(), buf.end());
+        fwrite(text.data(), 1, text.size(), stdout);
+        if (!text.empty() && text.back() != '\n') fputc('\n', stdout);
+        return 0;
+    }
 
     if (act == "export") {
         // 把虚拟机磁盘导出到用户可访问的位置（调查服务端期望的 qcow2 格式）

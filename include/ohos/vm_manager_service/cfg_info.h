@@ -181,6 +181,37 @@ constexpr std::size_t kIsForceImport = 40;    // bool
 
 }  // namespace migration
 
+/* ======================================================================
+ * ChannelInfo —— 主机与客户机之间的通道描述（SendDataToVm / RecvDataFromVm 用）
+ *
+ * 布局取自 [S] 的 ChannelInfo::Unmarshalling / Marshalling：
+ *   p = operator new(0x38); memset(p, 0, 0x38)
+ *   RefBase::RefBase(p + 40)                     ; 内嵌 RefBase（注意在 +40，不是 +48）
+ *   *(void**)p = baseN + 0xB4910                 ; 主 vtable 地址点（不需要 VTT）
+ *   *(uint32*)(p + 12) = 通道类型
+ *   new (p + 16) std::string(通道名)
+ *
+ * 通道类型取自 [N] 的 VmManagerChannelTypeInit（JS 枚举 ChannelType）：
+ *   SERIAL = 0（脚本里只见到 SERIAL 的赋值；SERIAL1 推测为 1）
+ *
+ * 实测（本机虚拟机命令行）：客户机侧的 virtio-serial 端口是
+ *   nr=1 id=winbox_serial0 → chardev socket .../uds/serial0.sock
+ *   nr=2 id=winbox_serial1 → chardev socket .../uds/serial1.sock
+ * ====================================================================== */
+namespace channel {
+
+constexpr std::size_t kSize = 0x38;
+constexpr std::uintptr_t kVtable = 0xB4910;   // ChannelInfo 主 vtable 地址点（[N] 库内）
+constexpr std::size_t kRefBaseOffset = 40;
+
+constexpr std::size_t kType = 12;  // uint32：通道类型（见下）
+constexpr std::size_t kName = 16;  // std::string：通道名
+
+constexpr std::uint32_t kTypeSerial = 0;   // ChannelType.SERIAL
+constexpr std::uint32_t kTypeSerial1 = 1;  // ChannelType.SERIAL1（推测）
+
+}  // namespace channel
+
 /* ------------------------------------------------------------ 序列化 */
 
 /**

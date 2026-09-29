@@ -67,6 +67,24 @@ class MigrationOptionsBuilder {
     std::string error_;
 };
 
+//: 手工构造 ChannelInfo（SendDataToVm / RecvDataFromVm 的描述参数）
+class ChannelInfoBuilder {
+  public:
+    ChannelInfoBuilder(std::uint32_t type, const std::string &name);
+    ~ChannelInfoBuilder();
+    ChannelInfoBuilder(const ChannelInfoBuilder &) = delete;
+    ChannelInfoBuilder &operator=(const ChannelInfoBuilder &) = delete;
+
+    bool ok() const { return obj_ != nullptr; }
+    const std::string &lastError() const { return error_; }
+    std::string dump() const;
+    void *raw() const { return obj_; }
+
+  private:
+    void *obj_ = nullptr;
+    std::string error_;
+};
+
 }  // namespace hvm
 
 #endif  // HVM_CFGINFO_H

@@ -198,6 +198,46 @@ std::string MigrationOptionsBuilder::dump() const {
     return buf;
 }
 
+ChannelInfoBuilder::ChannelInfoBuilder(std::uint32_t type, const std::string &name) {
+    NapiLib &lib = napiLib();
+    if (!lib.ok()) {
+        const char *e = dlerror();
+        error_ = std::string("加载 ") + kNapiLibName + " 失败: " + (e ? e : "未知原因");
+        return;
+    }
+    obj_ = ::operator new(abi::channel::kSize, std::nothrow);
+    if (obj_ == nullptr) {
+        error_ = "分配 ChannelInfo(0x38) 失败";
+        return;
+    }
+    std::memset(obj_, 0, abi::channel::kSize);
+
+    auto refBaseCtor = reinterpret_cast<CtorFn>(dlsym(RTLD_DEFAULT, "_ZN4OHOS7RefBaseC2Ev"));
+    if (refBaseCtor == nullptr) {
+        error_ = "找不到 RefBase 构造函数";
+        return;
+    }
+    char *p = static_cast<char *>(obj_);
+    // 与 [S] ChannelInfo::Unmarshalling 的构造序列一致
+    refBaseCtor(p + abi::channel::kRefBaseOffset);
+    *reinterpret_cast<void **>(p) = lib.at(abi::channel::kVtable);
+    *reinterpret_cast<std::uint32_t *>(p + abi::channel::kType) = type;
+    new (p + abi::channel::kName) std::string(name);
+}
+
+ChannelInfoBuilder::~ChannelInfoBuilder() { obj_ = nullptr; }
+
+std::string ChannelInfoBuilder::dump() const {
+    if (!obj_) return error_.empty() ? "(未构造)" : error_;
+    const char *p = static_cast<const char *>(obj_);
+    char buf[256];
+    snprintf(buf, sizeof buf, "ChannelInfo@%p vptr=%p type=%u name=\"%s\"", obj_,
+             *reinterpret_cast<void *const *>(p),
+             *reinterpret_cast<const std::uint32_t *>(p + abi::channel::kType),
+             (*reinterpret_cast<const std::string *>(p + abi::channel::kName)).c_str());
+    return buf;
+}
+
 std::string CfgInfoBuilder::dump() const {
     if (!obj_) return error_.empty() ? "(未构造)" : error_;
     const char *p = static_cast<const char *>(obj_);
