@@ -78,8 +78,12 @@ isLinuxFusionService:%d, isHiShellHap:%d, isOpenEulerHap:%d
 
 被拒绝时服务端会打 `... permission denied` 日志（hilog）。
 
-**结论：本仓库的两个命令都只能在系统自带的 HiShell 终端里运行。**
-（`openeuler` 走的融合开发引擎通道同样受身份限制，其 `libfusion_pty_common.z.so`
+**结论：本仓库的两个命令都只能在系统自带的 HiShell 终端里运行 —— 因为白名单里
+能被用户使用的终端只有 HiShell 一个。** 白名单其余条目（LinuxFusionService uid 5005、
+hwf_service uid 7700、openEuler HAP）都是系统服务或专用应用，用户无法在其中开终端；
+从 MKCode / BitFun / WorkBuddy / CodeArts Agent 等第三方应用的内置终端运行会被拒绝。
+
+（`openeuler` 走的融合开发引擎通道同样受身份限制：其 `libfusion_pty_common.z.so`
 里也带着 `com.huawei.hmos.hishell` 这个包名。）
 
 ## 4. 客户端 ABI 注意事项

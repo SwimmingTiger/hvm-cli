@@ -5,10 +5,15 @@
 **不需要 root、不需要 HAP** —— 全部通过 `dlopen` 直接调用系统自带库。
 
 > ⚠️ **必须在系统自带的 HiShell 终端中运行。**
-> 这两个命令调用的都是受限系统能力，服务端会校验调用者身份：`vm_manager` 的白名单
-> 只放行 HiShell HAP、LinuxFusionService(uid 5005)、hwf_service(uid 7700) 与
-> openEuler HAP；第三方应用（MKCode / BitFun / WorkBuddy / CodeArts Agent 等）的
-> 内置终端会被拒绝并返回 `permission denied`。详见[权限模型](#权限模型)。
+>
+> **原因：只有 HiShell 终端在虚拟机白名单内。**
+> 虚拟机服务 `vm_manager`（SA 65621）对*每一个*请求都做调用者身份校验
+> （`VmmCommonUtils::CheckCallerIdentity`），白名单里是这几类身份：
+> HiShell HAP、LinuxFusionService(uid 5005)、hwf_service(uid 7700)、openEuler HAP。
+> 其余都是系统服务或专用应用，**能被用户敲命令的终端只有 HiShell 一个**。
+> 因此从 MKCode / BitFun / WorkBuddy / CodeArts Agent 等第三方应用的内置终端运行，
+> 会在服务端被直接拒绝（日志 `... permission denied`），拿不到任何虚拟机能力。
+> 详见[权限模型](#权限模型)。
 
 本仓库构建**两个命令**，对应两条完全独立的技术栈：
 
@@ -115,7 +120,8 @@ isOpenEulerHap:%d`）。因此从系统自带终端 **HiShell** 启动的进程�
 反过来，从 MKCode / BitFun / WorkBuddy / CodeArts Agent 等第三方应用的内置终端
 启动会被拒绝（`permission denied`）。
 
-**结论：本工具只能在系统自带的 HiShell 终端里运行。**
+**结论：本工具只能在系统自带的 HiShell 终端里运行 —— 因为白名单里能被用户使用的
+终端只有它一个**（其余放行身份都是系统服务或专用 HAP，用户无法在其中开终端）。
 
 ## 构建
 
