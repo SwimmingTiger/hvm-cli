@@ -114,25 +114,15 @@ CreateVm 返回 rc=0 (OK)
 ### 3. 启动（开机）
 
 ```console
-# 首次启动（安装阶段）：挂安装盘 --image 与扩展盘 --enhance
 $ ./hvm-cli vm start --name myvm \
-      --image   /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
-      --enhance /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso \
-      --bios    /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
-      --cpu 6 --mem 8 --disk-gb 128
-
-# 装完之后再启动：只给扩展盘（安装盘只在第一次挂）
-$ ./hvm-cli vm start --name myvm \
-      --enhance /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso \
-      --bios    /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
-      --cpu 6 --mem 8 --disk-gb 128
+      --bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
+      --mem 6
 ```
 
-> **安装盘（`--image`）只在第一次启动（安装阶段）挂载**，装完之后不再挂；
-> 之后每次启动要用的是**扩展盘（`--enhance`）**，它对应客户机里的 `unattend` 槽位。
-> （实测：首次启动传了 `--image` + `--enhance`，命令行里有 `id=disk` 安装盘与
-> `id=unattend` 扩展盘两张；后续启动不传这两个参数时，命令行里只剩磁盘。
-> "安装盘只在第一次挂"这一条来自使用者经验，我们尚未单独做对照实验。）
+- `--mem` **至少要给**：服务端不接受内存为 0（只给 `--name` 会返回
+  `invalid memory size: 0`）。范围见 `vm range`（本机是 6..18 GB）；
+- 其余参数可以省略：省略的字段服务端用创建时存档的值（实测：省略 `--cpu` 时
+  仍按存档的 6 核启动，省略 `--bios` 时仍用存档的固件路径）。
 
 启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
 可以这样确认：
@@ -141,13 +131,38 @@ $ ./hvm-cli vm start --name myvm \
 $ ./hvm-cli vms myvm
 活动虚拟机: myvm
 名字                     状态     活动     磁盘镜像
-myvm                     9        是       /data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/vm.qcow2
+myvm                     9        是       /data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/myvm.qcow2
 
-$ pgrep -a stratovirt | grep myvm        # 首次启动时能看到两张光盘的 file=
+$ pgrep -a stratovirt | grep myvm        # 首次启动时命令行里能看到两张光盘的 file=
 ```
 
 > 服务端可能返回 `405 (VM_IP_UNAVAILABLE)`：那只是"启动后立刻查客户机 IP 没查到"，
 > **不代表启动失败**，虚拟机通常已经跑起来了。
+
+### 3.1 光盘怎么挂（重要）
+
+`start` 的 `--image` / `--enhance` **只在第一次启动（安装阶段）生效**：
+
+| 时机 | 光盘 |
+|---|---|
+| **第一次**启动 | 安装盘（`--image`）与扩展盘（`--enhance`）**两张都会挂上** |
+| **之后**每次启动 | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` 也一样（实测：此时命令行里只有 UEFI 固件、磁盘、UEFI vars） |
+
+装完之后要挂盘，用**热插拔**接口：
+
+```console
+$ ./hvm-cli vm mount-cd --name myvm \
+      --image /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso
+已挂载: /storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/oetool.iso
+服务端返回: 1
+```
+
+（`服务端返回: 1` 是服务端分配的设备 id，不是错误码。实测证据：`vmlog` 里能看到
+`QMP: --> blockdev_add { node_name: "cdrom-drive1" }` 与
+`QMP: --> device_add { driver: "usb-storage" }`，也就是以 USB 存储设备热插拔进去的。）
+
+> 服务端"第一次挂、之后不挂"的内部依据（很可能是一个"已安装"标志，`DoStartVm`
+> 内部会调 `InstallVm`）**尚未反汇编确认**，这里只记录实测行为。
 
 ### 4. 暂停 / 恢复
 
@@ -353,7 +368,7 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 
 - [x] `hvm-cli`：状态/能力/电源/快照/共享目录/网络/磁盘/显示/内存
 - [x] `hvm-cli`：**创建 / 启动 / 销毁虚拟机**（`CfgInfo` 手工构造，实测 `CreateVm` 返回 0）
-- [x] `hvm-cli`：安装盘与扩展盘挂载（自动转成媒体库视图路径，实测首次启动两张都挂上；安装盘只在第一次挂）
+- [x] `hvm-cli`：安装盘与扩展盘挂载 + 运行中热插拔（`vm mount-cd` / `vm unmount-cd`）。实测：**首次启动**两张盘都会挂上，之后启动不再自动挂盘，改用 `mount-cd`；ISO 路径会自动转成媒体库视图
 - [x] `hvm-cli`：主机 ↔ 客户机通道（`ChannelInfo` + `Send/RecvDataFromVm`）
 - [x] `hvm-cli`：LinuxFusion / RGM 运维面（`pause`/`resume`/剪贴板/图库/客户机磁盘共享/
       自动暂停之外的 23 个 kit 接口；kit 120 个方法已接 **78** 个）

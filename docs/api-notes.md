@@ -430,9 +430,13 @@ CheckWinImgPath(175)     Windows 安装镜像判定
 
 - 换成该写法后：`IsValidPath` / `DetectIsoType` / `CheckFiles` 全部通过、`CreateVm` 返回 0、
   首次启动后安装盘与扩展盘两张都出现在 stratovirt 命令行里、`vmlog` 里 `Permission denied` 计数为 0；
-  注意 **安装盘（`--image`）只在第一次启动（安装阶段）挂载**（使用者经验，我们尚未单独做
-  对照实验），装完之后每次启动挂的是扩展盘（`--enhance`，客户机的 `unattend` 槽位）。
-  实测部分是：首次启动传 `--image`+`--enhance` 时两张盘都在；后续启动不传这两个参数时只剩磁盘。
+  但**只有第一次启动**会挂这两张盘：之后即使 `start` 再传 `--image` / `--enhance`，
+  命令行里也只剩 UEFI 固件、磁盘与 UEFI vars（实测，`media=cdrom` 计数为 0）。
+  装完之后要挂盘必须用热插拔接口 `MountCDDriveToVm`（`hvm-cli vm mount-cd`），
+  它通过 QMP 以 `usb-storage` 设备热插拔：`blockdev_add { node_name: "cdrom-drive1" }`
+  → `device_add { driver: "usb-storage" }`，服务端返回分配的设备 id。
+  服务端"第一次挂、之后不挂"的内部依据（推测是"已安装"标志，`DoStartVm` 内会调
+  `InstallVm`）尚未反汇编确认。
 - 服务端库里本来就有对应白名单正则：`^/storage/media/\d+/local/files/Docs/`；
 - `hvm-cli` 已内置转换：`/storage/Users/currentUser/<p>` 与
   `file://docs/storage/Users/currentUser/<p>` → `/storage/media/<账号 id>/local/files/Docs/<p>`。
