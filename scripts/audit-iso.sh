@@ -19,7 +19,7 @@ ok()   { echo "  ✓ $*"; }
 bad()  { echo "  ✗ $*"; FAIL=1; }
 
 apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq squashfs-tools xorriso cpio gzip mtools >/dev/null 2>&1
+apt-get install -y -qq squashfs-tools xorriso cpio gzip xz-utils zstd mtools >/dev/null 2>&1
 
 echo "=== 0) ISO 基本信息 ==="
 [ -f "$ISO" ] && ok "$ISO_NAME 存在（$(stat -c %s "$ISO") 字节）" || { bad "找不到 $ISO"; exit 1; }
@@ -88,7 +88,17 @@ echo "=== 3) initrd 里的 live-boot 机制 ==="
 xorriso -osirrox on -indev "$ISO" -extract /live/initrd.img /tmp/ird.img >/dev/null 2>&1
 if [ -f /tmp/ird.img ]; then
     ok "initrd 存在（$(stat -c %s /tmp/ird.img) 字节）"
-    mkdir -p /tmp/ird && cd /tmp/ird && zcat /tmp/ird.img 2>/dev/null | cpio -idm --quiet 2>/dev/null || true
+    # initrd 可能是 zstd / gzip / xz 压缩的（内核按 CONFIG_RD_* 解），按魔数自动选解压器。
+    # 之前写死 zcat：换成 zstd 的 initrd 会被解成空内容，误报"initrd 里没有 scripts/live"。
+    MAGIC=$(od -An -tx1 -N4 /tmp/ird.img 2>/dev/null | tr -d " \n")
+    case "$MAGIC" in
+        28b52ffd) DEC="zstd -dc"; FMT=zstd ;;
+        1f8b*)    DEC="gzip -dc"; FMT=gzip ;;
+        fd377a58) DEC="xz -dc";   FMT=xz ;;
+        *)        DEC="cat";      FMT=unknown ;;
+    esac
+    echo "      （initrd 压缩格式：$FMT）"
+    mkdir -p /tmp/ird && cd /tmp/ird && $DEC /tmp/ird.img 2>/dev/null | cpio -idm --quiet 2>/dev/null || true
     [ -e /tmp/ird/scripts/live ] && ok "scripts/live（live-boot 的引导脚本）" || bad "没有 scripts/live"
     [ -e /tmp/ird/usr/bin/live-boot ] && ok "usr/bin/live-boot" || bad "没有 live-boot"
     find /tmp/ird -name "squashfs.ko" | grep -q . && ok "squashfs.ko" || bad "initrd 里没有 squashfs.ko"
