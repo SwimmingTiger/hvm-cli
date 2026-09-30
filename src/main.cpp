@@ -786,6 +786,10 @@ int printVmTable(Client &c, const std::string &cmd,
         return 0;
     }
     printf("当前虚拟机: %s\n", active.empty() ? "(无)" : active.c_str());
+    if (names.empty()) {
+        printf("（没有可显示的虚拟机：本地清单为空，也没探测到框架自带的名字）\n");
+        return 0;
+    }
     printf("%s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
            padTo("当前", 8).c_str(), "磁盘镜像");
     std::vector<std::string> stale;
@@ -801,9 +805,31 @@ int printVmTable(Client &c, const std::string &cmd,
                path.empty() ? "(无，已失效)" : path.c_str());
     }
     if (!stale.empty()) {
-        printf("提示：上面标记为「已失效」的 %zu 条在服务端已不存在（已销毁）；\n"
-               "      清单文件是纯文本，可直接删掉这些名字：%s\n",
-               stale.size(), kRegistryPath);
+        // 只有**确实记在本地清单里**的条目，才该提示"可以从清单删掉"；
+        // 像"当前虚拟机"这种服务端遗留记录并不在清单里，提清单只会误导。
+        const std::vector<std::string> reg = registryLoad();
+        std::vector<std::string> staleInReg, staleElse;
+        for (const auto &n : stale) {
+            if (std::find(reg.begin(), reg.end(), n) != reg.end()) staleInReg.push_back(n);
+            else staleElse.push_back(n);
+        }
+        auto join = [](const std::vector<std::string> &v) {
+            std::string out;
+            for (std::size_t i = 0; i < v.size(); ++i) {
+                if (i) out += "、";
+                out += v[i];
+            }
+            return out;
+        };
+        if (!staleInReg.empty())
+            printf("提示：清单里的 %s 在服务端已不存在（已销毁）；\n"
+                   "      清单文件是纯文本，可直接删掉这些名字：%s\n",
+                   join(staleInReg).c_str(), kRegistryPath);
+        if (!staleElse.empty())
+            printf("提示：%s 在服务端已不存在（已销毁）%s\n", join(staleElse).c_str(),
+                   (staleElse.size() == 1 && staleElse[0] == active)
+                       ? "（这只是服务端遗留的「当前虚拟机」记录，不在本地清单里）"
+                       : "");
     }
     return 0;
 }
@@ -1247,7 +1273,11 @@ int run(int argc, char **argv) {
     if (cmd == "vms") {
         std::vector<std::string> names;
         if (a.pos.empty()) {
-            for (const char *p : kProbeVmNames) names.push_back(p);   // 只是探测名单
+            // 探测名单里**不存在的不显示**：否则用户会看到一串自己从没建过的
+            // 名字（如 virtualized_linux）被标成"已失效"而困惑。
+            // 显式点名（vms <名字>）时不做过滤 —— 那是用户自己要看的。
+            for (const char *p : kProbeVmNames)
+                if (vmExists(c, p)) names.push_back(p);
         } else {
             names = a.pos;
         }
@@ -1434,8 +1464,17 @@ int run(int argc, char **argv) {
             // 无参 = 列出所有已知虚拟机的状态（与 list / vms 同一张表，
             // 顺带会标出哪些条目在服务端已不存在）
             std::vector<std::string> names = registryLoad();
-            for (const char *p : kProbeVmNames)
+            // 当前虚拟机也一并探测（它可能不在清单里，比如导入后又手工删过名字）
+            std::string active;
+            if (c.activeVmName(active) == 0 && !active.empty() &&
+                std::find(names.begin(), names.end(), active) == names.end())
+                names.push_back(active);
+            // 框架自带的名字只在**确实存在**时才列；不存在就不显示
+            for (const char *p : kProbeVmNames) {
+                if (!vmExists(c, p)) continue;
                 if (std::find(names.begin(), names.end(), p) == names.end()) names.push_back(p);
+            }
+            std::sort(names.begin(), names.end());
             return printVmTable(c, "vmstat", names);
         }
         int st = 0;
