@@ -82,24 +82,41 @@ CPU 数范围     : 6 .. 8
 ```console
 $ ./hvm-cli create \
       --name myvm \
-      --image   /storage/Users/currentUser/Download/com.huawei.hmos.hishell/debian-12.0.0-arm64-netinst.iso \
-      --enhance /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso \
+      --image   /storage/Users/currentUser/Download/debian-12-unattended-arm64.iso \
+      --enhance /storage/Users/currentUser/Download/oetool.iso \
       --bios    /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \
-      --cpu 6 --mem 8 --disk-gb 128
+      --cpu 6 --mem 8 --disk-gb 128 \
+      --net nat
 CreateVm 返回 rc=0 (OK)
 ```
+
+> `--image` 用**我们自己构建的 ISO**（由 `scripts/build-deb12iso.sh` 产出：debootstrap 目录树
+> → mksquashfs → grub-mkstandalone 的 EFI 引导 → El Torito → xorriso，并在 ISO 内放了通过
+> 框架 `CreateVm` 客户机类型校验所需的特征串）。构建与踩坑见
+> [docs/iso-install-notes.md](docs/iso-install-notes.md)。
 
 - **`CreateVm` 会顺带把虚拟机启动起来**（安装阶段就是这一次）：实测返回 rc=0 之后
   立刻就有 `stratovirt` 进程、`vms` 里状态不再是 0，且**安装盘与扩展盘两张都挂在这一刻**
   —— 所以创建之后通常**不需要**再 `start`（详见 [3.1](#31-光盘怎么挂重要)）。
   用完记得停机：`./hvm-cli force-stop myvm`；
-- `--image` 是安装盘 ISO。这个路径会被**自动转换**成媒体库视图
-  `/storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/debian-...iso`
+- `--image` 是安装盘 ISO（上例就是我们自己构建的那份）。这个路径会被**自动转换**成媒体库视图
+  `/storage/media/100/local/files/Docs/Download/debian-12-unattended-arm64.iso`
   —— 它是唯一能让 `stratovirt` 真正打开光盘的形式（原因见 [api-notes 第 10 节](docs/api-notes.md)）。
   账号 id（这里是 `100`）取自 `$USER`，多账号设备上第二个账号是 `101`；
+- **`--net nat`（或 `--net bridge`）必须在 `create` 时给** —— 网络不是磁盘里的东西，
+  而是宿主侧按 `CfgInfo` 分配的。实测：`create … --net nat` 的虚拟机会有网卡
+  （`stratovirt` 命令行里出现 `virtio-net-pci,netdev=net0` 与宿主侧 tap `WVMTap…`）；
+  而**只**把 `--net nat` 加在 `start` 上则**没有网卡**。所以省略它就拿不到网络。
+  桥接用 `--net bridge --nic <宿主物理网卡名>`（桥接时 `networkDevice` 必须为 false，
+  否则服务端会强制按 NAT 处理）。详见
+  [docs/iso-install-notes.md 第 4 节](docs/iso-install-notes.md)。
+  **限定**：实测通过的是 **NAT**；**桥接还没验证过** —— 此前在 `start` 上加 `--net bridge --nic …`
+  一律得到常量错误 `-151060477`，`create` 时未测；
 - `--enhance` 是**扩展盘（enhance ISO）**，**创建时必填**且必须是 `.iso` 文件
   （服务端校验：`enhanceFilePath` 不能为空，否则 `create vm fail, enhance file path is null`）。
-  它对应客户机里的 `unattend` 槽位；
+  它对应客户机里的 `unattend` 槽位。**它不能与 `--image` 指向同一个文件** ——
+  实测两者填同一个 ISO 会被拒：`CreateVm 返回: unknown (-16842748)`；填成两个不同文件即正常
+  （本仓库的用法是安装盘填构建出来的 ISO、扩展盘始终填 `oetool.iso`）；
 - 创建成功后会**自动登记**到本地清单
   `/data/storage/el2/base/preferences/hvm-cli-vms.list`（一行一个名字），
   销毁时自动移除 —— 因为服务端**没有枚举接口**（见[能力边界](#能力边界)），
@@ -140,7 +157,7 @@ StartVm 返回 rc=0 (OK)
 | | 2.1 从 ISO 安装 | 2.2 导入 qcow2 |
 |---|---|---|
 | 适用 | 全新系统、要跑安装器 | 已有现成磁盘；迁移 / 恢复 / 备份还原 |
-| 需要准备 | 安装 ISO + 扩展盘 ISO（`--enhance` 必填） | 一个 qcow2 + 它的 SHA-256（大写） |
+| 需要准备 | 安装 ISO（可用 `scripts/build-deb12iso.sh` 自建）+ 扩展盘 ISO（`--enhance` 必填，且**不能与 `--image` 同文件**） | 一个 qcow2 + 它的 SHA-256（大写） |
 | 建好后的状态 | 创建时已顺带启动过一次（正在安装） | 仍是停止状态，需 `start --cpu/--mem` 才开机 |
 | 磁盘 | 框架按 `--disk-gb` 自动生成 | 就是导入的那个 qcow2（导入后会拷进服务区） |
 
@@ -208,8 +225,8 @@ $ pgrep -a stratovirt | grep myvm        # create 那次启动时命令行里能
 
 ```console
 $ ./hvm-cli mount-cd --name myvm \
-      --image /storage/Users/currentUser/Download/com.huawei.hmos.hishell/oetool.iso
-已挂载: /storage/media/100/local/files/Docs/Download/com.huawei.hmos.hishell/oetool.iso
+      --image /storage/Users/currentUser/Download/oetool.iso
+已挂载: /storage/media/100/local/files/Docs/Download/oetool.iso
 服务端返回: 1
 ```
 

@@ -17,7 +17,7 @@
 #
 # 用法（需要 root；**不需要**任何挂载/nbd 权限，容器里也能跑）：
 #   sudo scripts/build-deb12iso.sh [输出iso] [工作目录]
-#   默认：/home/$USER/deb12iso.iso   /home/$USER/deb12iso-build
+#   默认：/home/$USER/debian-12-unattended-arm64.iso   /home/$USER/deb12iso-build
 #
 # 可用环境变量：
 #   MIRROR     apt 镜像（默认清华 http；https 在部分环境证书不全）
@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-ISO="${1:-/home/${SUDO_USER:-$USER}/deb12iso.iso}"
+ISO="${1:-/home/${SUDO_USER:-$USER}/debian-12-unattended-arm64.iso}"
 WORK="${2:-/home/${SUDO_USER:-$USER}/deb12iso-build}"
 MIRROR="${MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}"
 SUITE="${SUITE:-bookworm}"

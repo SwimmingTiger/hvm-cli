@@ -180,7 +180,7 @@ if (!QcowDisk) {
 sudo podman run … debian:12 /work/build-container.sh
 
 # 取回设备（virtiofs 共享目录，一步到位）
-./openeuler exec 'cp /home/hu60/iso-work/deb12iso.iso \
+./openeuler exec 'cp /home/hu60/iso-work/debian-12-unattended-arm64.iso \
     /mnt/linux_share/storage/Users/currentUser/Download/'
 
 # 审计：efi.img 内容 + PE 头 + squashfs 关键文件 + initrd 的 live-boot 机制

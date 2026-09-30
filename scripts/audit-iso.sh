@@ -12,7 +12,7 @@
 #   2) squashfs：装好后系统要用的关键文件是否齐全（少一个都会让安装/启动失败）
 #   3) initrd：live-boot 的脚本与 squashfs/isofs 模块在不在
 set -uo pipefail
-ISO_NAME="${1:-deb12iso.iso}"
+ISO_NAME="${1:-debian-12-unattended-arm64.iso}"
 ISO="/iso/$ISO_NAME"
 FAIL=0
 ok()   { echo "  ✓ $*"; }
