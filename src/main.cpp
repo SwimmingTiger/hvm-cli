@@ -202,6 +202,15 @@ void usage() {
         "磁盘:\n"
         "  disk capacity | disk path | disk size | disk expand <GB> | disk delete-data\n"
         "\n"
+        "磁盘导出 / 导入（把某台虚拟机的磁盘导出成文件；或从镜像文件导入成一台新虚拟机）:\n"
+        "  export --name <虚拟机> --src <目标目录> --dst <文件名>      导出该虚拟机的磁盘\n"
+        "  import --name <新虚拟机名> --src <镜像文件> --dst <sha256>  从镜像导入成一台新虚拟机\n"
+        "      · <目标目录> 必须已存在；最终文件是 目录/文件名，导出后可直接在文件管理器里找到\n"
+        "      · <镜像文件> 给完整路径；<sha256> 必须是【大写】十六进制：\n"
+        "          sha256sum x.qcow2 | cut -d' ' -f1 | tr a-f A-F\n"
+        "      · 导入用的虚拟机名必须【尚不存在】（导入动作本身就会创建这台虚拟机）\n"
+        "      · import 建出的虚拟机还没有配置，启动时要显式给参数：start <名字> --cpu 6 --mem 6\n"
+        "\n"
         "显示/内存:\n"
         "  resolution <宽> <高> [--full]\n"
         "  touch-mem <MB>\n"
@@ -213,10 +222,8 @@ void usage() {
         "  displays <id[,…]>       把显示器 id 列表交给服务端（同上）\n"
         "  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
         "  serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
-        "  import --name N --src SRC --dst DST   服务端拷贝（UOS 磁盘迁移专用）\n"
-        "  export --name N --src SRC --dst DST   同上（导出）\n"
         "  selftest                kit 加载自检\n"
-        "  hash-name               Hash 名（服务端实现有缺陷，已禁用）\n"
+        "  hash-name               迁移用的 Hash 名（未发起过迁移时为空）\n"
         "  share-volumes           列出全部共享卷（返回元素类型未还原，已禁用）\n"
         "  linux-path <宿主路径..> 宿主→客户机路径（服务端只允许 LinuxFusion 服务调用）\n"
         "  buffer avail|low <字节> 上报内存阈值（是“上报”而非查询，慎用）\n"
@@ -879,9 +886,14 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     }
 
     if (act == "export") {
-        // 把虚拟机磁盘导出到用户可访问的位置（调查服务端期望的 qcow2 格式）
+        // 导出虚拟机磁盘。参数语义（实测）：
+        //   --src = 目标【目录】（服务端 realpath 且要求是目录）
+        //   --dst = 目标【文件名】（纯文件名，服务端自己拼 目录/文件名）
         if (name.empty() || bios.empty() || enhance.empty()) {
-            fprintf(stderr, "用法: hvm-cli vm export --name N --src <服务端磁盘路径> --dst <用户区路径>\n");
+            fprintf(stderr,
+                    "用法: hvm-cli vm export --name <vm> --src <目标目录> --dst <目标文件名>\n"
+                    "      （--src 与 --bios 同义，--dst 与 --enhance 同义；\n"
+                    "        目录必须存在，文件名服务端会拼成 目录/文件名）\n");
             return 2;
         }
         hvm::MigrationOptionsBuilder opts;
@@ -896,11 +908,16 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     }
 
     if (act == "import") {
-        // 让服务端把文件拷到指定位置（用于把 ISO 搬进 stratovirt 能读的服务数据区）
+        // 导入磁盘（服务端把源镜像拷成该虚拟机的磁盘）。参数语义（实测打通）：
+        //   --src = 源镜像的【完整文件路径】（服务端 realpath）
+        //   --dst = 该文件的【SHA-256 十六进制】，★ 必须【大写】（服务端逐字节比较）
+        // 另外：目标虚拟机名必须是【尚不存在】的（导入即建机；已存在会报
+        // "dest disk img file already exist"），启动时需显式给 --cpu/--mem。
         if (name.empty() || bios.empty() || enhance.empty()) {
             fprintf(stderr,
-                    "用法: hvm-cli vm import --name <vm> --src <源路径> --dst <目标路径>\n"
-                    "      （--src 与 --bios 同义，--dst 与 --enhance 同义）\n");
+                    "用法: hvm-cli vm import --name <新虚拟机名> --src <源镜像文件> --dst <sha256大写>\n"
+                    "      （--src 与 --bios 同义，--dst 与 --enhance 同义）\n"
+                    "      提示：sha256 需大写，如 sha256sum x.qcow2 | cut -d' ' -f1 | tr a-f A-F\n");
             return 2;
         }
         // MigrationOptions：服务端要求非空，字段布局见 include/.../cfg_info.h
@@ -914,7 +931,7 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
             return fail("vm import", rc,
                         std::string("ImportVmDiskImage 返回: ") + ohos_vm_error_name(rc) + " (" +
                             std::to_string(rc) + ")");
-        printf("已提交拷贝：%s -> %s\n", bios.c_str(), enhance.c_str());
+        printf("已提交导入：%s（sha256 %s）→ 虚拟机 %s\n", bios.c_str(), enhance.c_str(), name.c_str());
         return 0;
     }
 
@@ -1291,16 +1308,21 @@ int run(int argc, char **argv) {
         return 0;
     }
     if (cmd == "hash-name") {
-        // 实测：本机（未 provision，/data/virt_service 不存在）调用该接口会在
-        // 系统库内部解引用 *(this+184) 得到空指针而段错误，调试器抓到的现场：
-        //   VmManagerClient::GetHashName: ldr x0,[x0,#184]; ldr x9,[x0]  ← 崩在这
-        // 这是库自身的健壮性问题（我们的调用约定经其它按值返回接口验证无误），
-        // 因此这里直接拒绝执行，避免用户看到段错误。
-        fprintf(stderr,
-                "hash-name 已禁用：GetHashName 在本机未 provision 的环境下会在\n"
-                "系统库内空指针崩溃（VmManagerClient::GetHashName 解引用 *(this+184)）。\n"
-                "该接口与本地开发无关，如需请先让 vm_manager 完成 provisioning。\n");
-        return 3;
+        // 迁移相关的"哈希名"（服务端 VmAssistantManager 的成员，由迁移流程填充）。
+        // 早先曾解析成 VmManagerClientWrapper::GetHashName 而在库内空指针崩溃，
+        // 改为 VmManagerProxy::GetHashName（与其它 87 个方法一致）后实测可正常调用；
+        // 未发起过迁移时返回空串。
+        std::string v;
+        int rc = c.hashName(v);
+        if (rc != 0) return fail(cmd, rc, "GetHashName 失败");
+        if (g_json) {
+            Json j(cmd);
+            j.str("hashName", v.empty() ? "(空：尚未发起过迁移)" : v);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s\n", v.empty() ? "(空：尚未发起过迁移)" : v.c_str());
+        }
+        return 0;
     }
     if (cmd == "hash-name-disabled") {
         std::string v;

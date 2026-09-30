@@ -506,27 +506,84 @@ RefBase::IncStrongRef(p + 48, &holder)
 
 已实现：`src/cfginfo.{h,cpp}` 的 `MigrationOptionsBuilder`、`hvm-cli import` / `export`。
 
-### 11.2 服务端三道闸门（实测，逐步放行）
+### 11.2 三个字符串参数的语义：export 与 import **不一样**
+
+wire 顺序由桩函数反编译确认（`HandleExportVmDiskImage` / `HandleImportVmDiskImage`）：
+① 读字符串 = 虚拟机名（校验 1..30 字符、拒绝含 `..`）；② ③ 依次是另外两个字符串；
+最后读 `MigrationOptions`（空则报 `MigrationOptions is nullptr.`，1086），再原样转交实现层。
+
+| 方向 | 第 2 个字符串 | 第 3 个字符串 |
+|---|---|---|
+| `ExportVmDiskImage` | 目标**目录**（服务端 `realpath` + 必须是目录） | 目标**文件名**（纯文件名，服务端自己拼 `目录/文件名`） |
+| `ImportVmDiskImage` | 源镜像**完整文件路径**（服务端对它做 `realpath`） | 该文件的 **SHA-256 十六进制**（★ 必须**大写**） |
+
+服务端对这两个字符串**原样使用**（`realpath`），不拼接、不改写。
+本仓库 CLI 的 `toServicePath()` 只把 `/storage/Users/currentUser/...`（或 `file://docs/...`）
+改写成 `/storage/media/<uid>/local/files/Docs/...`，其它路径（`/storage/media/...`、`/data/service/...`）
+**原样透传**。因此"服务端解析不到路径"从来不是路径格式问题，见下。
+
+### 11.3 三道闸门与真正的过法（已实测打通）
 
 ```
-1) [(HandleImportVmDiskImage:1086)]       MigrationOptions is nullptr.            → 传入构造好的对象后消失
-2) [(CheckVmStateForMigration:1933)]      the state of virtual machine not stopped → 停机后通过
-3) [(CheckBeforeImportVmDisk:1973)]       src disk img was broken                  → 过不去
+1) [(HandleImportVmDiskImage:1086)]  MigrationOptions is nullptr.        → 传构造好的对象即过
+2) [(CheckVmStateForMigration:1933)] the state of virtual machine not stopped
+      → 目标虚拟机必须处于"停止"状态；名字**不存在**也能过（这正是"导入即建机"的用法）
+3) [(CheckBeforeImportVmDisk:...)]   —— 内部依次是四条
+   a) realpath(源路径) 失败                → "src disk img file not exist"      (401 / 1959)
+   b) GetGuestType / IsLegalUosCalling 分支 → "src disk img ostype invalid"      (-16842744 / 1967)
+   c) 文件 SHA-256 ≠ 第 3 参数             → "src disk img was broken"          (-251723775 / 1973)
+      ★ 服务端算出的摘要是**大写**十六进制，日志实据：
+        [(GetFileSha256:1912)]file sha256: D2C2A44D04A6D8A31D65CF6B67F6E24078AD85D7228C794AFB9BBBC1ABC130A7
+        传小写会逐字节比较失败 → 判 broken。这就是卡了很久的真正原因。
+   d) 目标磁盘文件已存在                   → "dest disk img file already exist"  (401 / 1985)
+      ★ 所以 import 必须用一个**还不存在的虚拟机名**（导入动作本身会建机）
+成功路径：CopyFile → CheckAfterImportVmDisk → SetVmMigrationEnd
 ```
 
-第 3 条的根因（关键）：`VmmCommonUtils::GetGuestType` **并不解析 qcow2**，而是
+> 更正：本节早先把第 3 条归因为"`GetGuestType` 从系统设置库查客户机类型，用户区文件必然 broken"。
+> 那是**错的** —— 实测日志显示 `[(GetGuestType:249)]os type in qcow2:0` 是通过的，
+> 真正的失败点是 (c) 的**哈希大小写**与 (d) 的**目标已存在**。已按实测改正。
+
+### 11.4 完整可用流程（实测跑通一台 Debian 12）
+
+```console
+# 源镜像要放在服务端能 realpath 的位置（本仓库用 hmdfs 视图；用户下载区亦可，CLI 会改写）
+H=/data/service/el2/100/hmdfs/account/files/Docs/Download/<目录>
+
+# 1) 导入：第 3 参数 = 源文件 sha256 的【大写】形式；名字用一个尚不存在的虚拟机
+$ SHA=$(sha256sum img.qcow2 | cut -d' ' -f1 | tr 'a-f' 'A-F')
+$ ./hvm-cli import --name <新虚拟机名> --src "$H/img.qcow2" --dst "$SHA"
+已提交拷贝：...
+
+# 2) 启动：import 建出的虚拟机没有配置参数（cpuNum/memSize 为 0），必须显式给
+$ ./hvm-cli start <新虚拟机名> --cpu 6 --mem 6
+StartVm 返回 rc=0 (OK)
+
+# 3) 看串口确认引导（vmlog 只打印客户机串口）
+$ ./hvm-cli vmlog
+...
+ Debian GNU/Linux 12 <hostname> ttyAMA0          ← 登录横幅出现即为成功
+```
+
+### 11.5 两个"哈希"不是一回事（容易踩）
+
+| 用途 | 算法 | 形式 |
+|---|---|---|
+| 源镜像校验（本次踩坑处） | `HashWithSHA256`：OpenSSL `SHA256_Init` + 分块读文件 | **大写**十六进制 |
+| 迁移配对/登记（`VmmCommonUtils`） | `CalculateHash` = libc++ `__murmur2_or_cityhash<u64>` | `to_string(hash)` 十进制字符串 |
+
+`VmmCommonUtils::GetHash(in, out)` 的两个分支（`GetHash.cfi` 实测反编译）：
 
 ```c
-key = <hwf.* 前缀> + 磁盘路径;
-SettingProvider::GetIntValue(instance, key, &type);   // 从系统设置库查"客户机类型"
+if (appId == "DATA_OPENEULER_HAP_ID") out = in;                     // 特权特例：原样返回
+else                                  out = to_string(cityhash64(appId + <数> + in));
 ```
 
-只有服务端自己创建的磁盘才有这条记录 → 用户区的文件必然判 broken；
-该检查还带 `IsLegalUosCalling` 分支（UOS 迁移场景）。
-`VmAssistantManager::CopyFile` 的调用者**只有** `ImportVmDiskImage` / `ExportVmDiskImage`
-（xref 确认），因此服务端**不存在**"用户区 → 服务区"的通用文件搬运通道。
+公开 API `GetHashName()` 读取这份登记值（`VmAssistantManager + 256`），未发起过迁移时为空串。
 
-实测：标准 `qemu-img` 空白 qcow2（v3、100 GB 虚拟大小、198 KB 稀疏）与 ISO 都报同样错误。
+> 本仓库曾把 `GetHashName` 解析成 `VmManagerClientWrapper::GetHashName`，
+> 它内部转调 `VmManagerClient::GetHashName` 时解引用未初始化成员 → **段错误**（`hash-name` 因此被禁用）。
+> 改解析 `VmManagerProxy::GetHashName`（与其余方法一致）后**实测可正常调用**。
 
 ## 12. 主机 ↔ 客户机通道（ChannelInfo / SendDataToVm / RecvDataFromVm）
 

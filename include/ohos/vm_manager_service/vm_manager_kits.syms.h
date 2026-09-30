@@ -35,7 +35,7 @@ inline constexpr SymEntry kWrapSyms[] = {
     {"GetActiveVmStatus", "_ZN4OHOS16VmManagerService22VmManagerClientWrapper17GetActiveVmStatusERi"},
     {"GetActiveVmStatusForShutdown", "_ZN4OHOS16VmManagerService22VmManagerClientWrapper28GetActiveVmStatusForShutdownERi"},
     {"GetAllSharedVolume", "_ZN4OHOS16VmManagerService22VmManagerClientWrapper18GetAllSharedVolumeEv"},
-    {"GetHashName", "_ZN4OHOS16VmManagerService22VmManagerClientWrapper11GetHashNameEv"},
+    {"GetHashName", "_ZN4OHOS16VmManagerService14VmManagerProxy11GetHashNameEv"},
     {"GetHostSN", "_ZN4OHOS16VmManagerService22VmManagerClientWrapper9GetHostSNERNSt3__h12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE"},
     {"GetInstance", "_ZN4OHOS16VmManagerService22VmManagerClientWrapper11GetInstanceEv"},
     {"GetLinuxPathFromOhPath", "_ZN4OHOS16VmManagerService22VmManagerClientWrapper22GetLinuxPathFromOhPathERKNSt3__h6vectorINS2_12basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEENS7_IS9_EEEERSB_"},

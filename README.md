@@ -28,7 +28,9 @@
 
 ## hvm-cli：虚拟机管理
 
-命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vm-info`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vm-status`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`export`、`hash-name`、`import`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
+命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vm-info`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vm-status`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、`export`、`import`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`hash-name`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
+
+> **常用：导出 / 导入虚拟机磁盘** —— 把某台虚拟机的磁盘导出成文件，或把一个镜像文件导入成一台新虚拟机，见[导出与导入虚拟机磁盘](#hvm-cli导出与导入虚拟机磁盘)。
 
 ## openeuler：融合开发引擎里的 openEuler 环境
 
@@ -275,6 +277,45 @@ $ ./hvm-cli --vm win11 disk path
 > hmdfs 真实路径则是 `ohsw_stratovirt` 域读不了（SELinux）。
 > 详见 `docs/api-notes.md` 第 10 节。
 
+## hvm-cli：导出与导入虚拟机磁盘
+
+把某台虚拟机的磁盘**导出**成文件（备份、拿到别的工具里挂载查看），
+或者把一个镜像文件**导入**成一台新虚拟机。
+
+```console
+# 导出：--src 是「目标目录」（必须已存在），--dst 是「文件名」
+#       服务端会写成 目录/文件名，导出完成后可在文件管理器的下载目录里看到
+$ ./hvm-cli export --name debian12 \
+      --src /storage/Users/currentUser/Download \
+      --dst debian12.qcow2
+已提交导出：/data/service/el2/100/hmdfs/... -> debian12.qcow2
+
+# 导入：--src 是「源镜像的完整文件路径」，--dst 是该文件的 SHA-256
+#       ★ 必须是大写十六进制
+$ SHA=$(sha256sum debian12.qcow2 | cut -d' ' -f1 | tr a-f A-F)
+$ ./hvm-cli import --name debian13 \
+      --src /storage/Users/currentUser/Download/debian12.qcow2 --dst "$SHA"
+已提交导入：...（sha256 ...）→ 虚拟机 debian13
+
+# 导入出来的虚拟机还没有配置参数，启动时必须显式给 CPU / 内存
+$ ./hvm-cli start debian13 --cpu 6 --mem 6
+StartVm 返回 rc=0 (OK)
+
+# 看客户机串口确认是否正常开机
+$ ./hvm-cli vmlog
+```
+
+三个容易踩的点：
+
+1. **两个方向的参数含义不同** —— `export` 是「目标目录 + 文件名」，
+   `import` 是「源镜像的完整文件路径 + 该文件的 SHA-256」；
+2. **SHA-256 必须大写** —— 服务端逐字节比较，传小写会被判成「镜像损坏」（`src disk img was broken`）；
+3. **导入用的虚拟机名必须尚不存在** —— 导入这个动作本身就会创建这台虚拟机；
+   名字若已存在会报「目标磁盘已存在」。导入之后还要 `start <名字> --cpu N --mem M` 才会开机。
+
+镜像文件放在**用户下载目录**即可，CLI 会自动把它转换成服务端能读到的路径；
+导出的磁盘若要在别处挂载，标准 `qemu-nbd` / `qemu-img` 都能直接打开。
+
 ## 能力边界
 
 完整的证据与推导见 [`docs/api-notes.md` 第 13 节](docs/api-notes.md)。一句话版本：
@@ -350,8 +391,7 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 | `ctor [选项]` | 只构造 `CfgInfo` 入参对象并打印字段布局，**不调服务端**（验证构造配方） |
 | `view-state <0\|1\|2>` / `displays <id>` | 上报 `HapViewState` / 显示器 id 列表（研究视图机制用） |
 | `serial-read` / `serial-write` | 读写客户机通道（`ChannelInfo`） |
-| `import` / `export` | 服务端 `Import/ExportVmDiskImage`（UOS 磁盘迁移专用，见 api-notes §11） |
-| `hash-name` | 已禁用（服务端返回的指针在 `GetHashName` 内部会段错误） |
+| `hash-name` | 迁移用的 Hash 名（`GetHashName`；未发起过迁移时为空串） |
 | `selftest` | 两条通路的加载自检（`hvm-cli selftest` / `openeuler selftest`） |
 | `share-volumes` | 列出全部共享卷（`GetAllSharedVolume` 的返回元素类型未还原，命令保留但直接报错） |
 | `linux-path <宿主路径..>` | 宿主路径 → 客户机内路径；服务端只允许 LinuxFusion 服务调用，HiShell 身份会被拒 |
