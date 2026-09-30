@@ -176,8 +176,8 @@ void usage() {
 
         "  screen-lock-task on|off 锁屏任务开关\n"
         "  tablet <int>            平板切换上报\n"
-        "  vminfo                  活动虚拟机的 DDR 大小与进程 PID\n"
-        "  stratovirt-mem          stratoVirt 占用内存（字节）\n"
+        "  vminfo                  活动虚拟机的 DDR 大小（GB）与进程 PID\n"
+        "  stratovirt-mem          stratoVirt 占用内存（KB）\n"
         "  host-sn                 宿主 SN\n"
         "  capability              本机是否支持虚拟化\n"
         "  active-name             活动虚拟机名\n"
@@ -1227,15 +1227,17 @@ int run(int argc, char **argv) {
         return rc;
     }
     if (cmd == "vminfo") {
-        uint32_t ddr = 0, pid = 0;
-        int rc = c.getVmInfo(ddr, pid);
+        // 实测：GetVmInfo 返回的是【GB】（给 6GB 的虚拟机返回 6、给 8GB 返回 8），
+        // 不是 MB —— 早先按 MB 打印是错的。
+        uint32_t ddrGb = 0, pid = 0;
+        int rc = c.getVmInfo(ddrGb, pid);
         if (rc != 0) return fail(cmd, rc, "GetVmInfo 失败（可能没有活动虚拟机）");
         if (g_json) {
             Json j(cmd);
-            j.num("ddrSizeMb", ddr).num("vmPid", pid);
+            j.num("ddrSizeGb", ddrGb).num("vmPid", pid);
             printf("%s\n", j.ok().c_str());
         } else {
-            printRow("DDR 大小", std::to_string(ddr) + " MB");
+            printRow("DDR 大小", std::to_string(ddrGb) + " GB");
             printRow("虚拟机 PID", std::to_string(pid));
         }
         return 0;
@@ -1246,12 +1248,14 @@ int run(int argc, char **argv) {
         if (rc != 0) return fail(cmd, rc, "GetStratovirtMem 失败");
         if (g_json) {
             Json j(cmd);
-            j.num("bytes", mem);
+            j.num("kb", mem);
             printf("%s\n", j.ok().c_str());
         } else {
-            // 接口返回字节数（实测 11061624 B），顺带给人看的 MiB
-            printf("%lld 字节 (%.1f MiB)\n", static_cast<long long>(mem),
-                   static_cast<double>(mem) / (1024.0 * 1024.0));
+            // 实测单位是【KB】不是字节：与引擎进程的 VmRSS(kB) 同步采样，
+            // 两者量级一致且同向变化（224658/377828、701566/810664，比值 0.6~0.87）；
+            // 若是字节，比值会是 0.001 量级。
+            printf("%lld KB (%.1f MiB)\n", static_cast<long long>(mem),
+                   static_cast<double>(mem) / 1024.0);
         }
         return 0;
     }
