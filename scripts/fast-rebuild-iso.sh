@@ -4,8 +4,8 @@
 #
 # 在 openEuler 的容器里跑：
 #   sudo podman run --rm --privileged --network host \
-#     -v /home/hu60/iso-work:/work \
-#     -v <宿主机上放旧 ISO 的目录>:/iso \
+#     -v $HOME/iso-work:/work \
+#     -v /mnt/linux_share/storage/Users/currentUser/Download:/iso \
 #     debian:12 bash /work/fast-rebuild-iso.sh
 set -euo pipefail
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ISO 落地后的「一次性审计」：在 openEuler 的容器里跑（不碰设备、不碰 x570）
+# ISO 落地后的「一次性审计」：在构建机的容器里跑，全程只读 ISO，不接触任何虚拟机
 #
 # 用法（在 openEuler 上）：
 #   sudo podman run --rm --network host \
