@@ -182,7 +182,7 @@ void usage() {
         "  capability              本机是否支持虚拟化\n"
         "  active-name             活动虚拟机名\n"
         "  active-status           活动虚拟机状态码\n"
-        "  vm-status [名字]        指定虚拟机状态码\n"
+        "  vmstat [名字]           指定虚拟机状态码\n"
         "  process-exist <进程名>  进程是否存在\n"
         "  feature <ID>            特性是否支持\n"
         "  open-euler-version      openEuler 镜像版本\n"
@@ -1334,7 +1334,7 @@ int run(int argc, char **argv) {
         }
         return 0;
     }
-    if (cmd == "vm-status") {
+    if (cmd == "vmstat") {
         int st = 0;
         std::string vm = a.pos.empty() ? a.vm : a.pos[0];
         int rc = c.vmStatus(vm, st);

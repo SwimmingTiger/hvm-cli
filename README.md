@@ -28,7 +28,7 @@
 
 ## hvm-cli：虚拟机管理
 
-命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vminfo`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vm-status`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、`export`、`import`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`hash-name`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
+命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vminfo`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vmstat`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、`export`、`import`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`hash-name`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
 
 > **常用：导出 / 导入虚拟机磁盘** —— 把某台虚拟机的磁盘导出成文件，或把一个镜像文件导入成一台新虚拟机，见[导出与导入虚拟机磁盘](#hvm-cli导出与导入虚拟机磁盘)。
 
@@ -257,7 +257,7 @@ $ ./hvm-cli destroy myvm
 $ ./hvm-cli list                         # 枚举我们创建过的虚拟机（读本地清单）
 $ ./hvm-cli vms                          # 已知虚拟机一览
 $ ./hvm-cli active-name                  # 当前活动虚拟机
-$ ./hvm-cli vm-status myvm               # 状态码（0=未运行 9=运行中）
+$ ./hvm-cli vmstat myvm               # 状态码（0=未运行 9=运行中）
 $ ./hvm-cli --vm myvm disk path           # 磁盘镜像路径
 $ ./hvm-cli --vm myvm disk capacity       # 磁盘容量
 $ ./hvm-cli --vm myvm snapshot list       # 快照列表
