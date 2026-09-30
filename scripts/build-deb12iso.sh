@@ -216,6 +216,20 @@ case "\$DISK" in
 esac
 LOG() { echo "[\$(date +%H:%M:%S)] \$*" | tee -a /dev/console; }
 
+# 已经装过就跳过：重启后光盘仍会被引导，安装器会再跑一次 —— 不拦就会「装了又装」死循环。
+if [ -b "\$DISK" ]; then
+    mkdir -p /tmp/probe 2>/dev/null || true
+    if mount "\${P}2" /tmp/probe 2>/dev/null; then
+        if [ -e /tmp/probe/etc/hvm-installed ]; then
+            LOG "目标盘已有安装标记 —— 跳过安装（重启后光盘仍被引导属正常）"
+            LOG "现在停在 live 系统里，可以直接用 SSH 连进来"
+            umount /tmp/probe 2>/dev/null || true
+            exit 0
+        fi
+        umount /tmp/probe 2>/dev/null || true
+    fi
+fi
+
 LOG "安装开始：目标盘 \$DISK"
 if [ ! -b "\$DISK" ]; then LOG "错误：找不到目标盘 \$DISK，安装中止（请检查虚拟机配置）"; exit 1; fi
 
@@ -289,9 +303,16 @@ umount -R /target/sys 2>/dev/null || true
 rm -f /target/var/lib/dbus/machine-id /target/etc/ssh/ssh_host_*
 
 sync
+# ★ 必须在 umount 之前写，否则只落在 live 的临时层、磁盘上没有
+touch /target/etc/hvm-installed 2>/dev/null || true
 umount -R /target
 LOG "安装完成 ✓ 即将关机；请在框架里卸载安装光盘后重新启动（就会从磁盘引导）"
-systemctl poweroff || poweroff -f
+# 安装标记：重启后光盘再被引导时，安装器据此跳过重复安装
+# ★ 重启而不是关机：关机后进程消失，再 start 出来的虚拟机**没有网卡**（实测四次都是），
+#   而且没有控制台可以输入 —— 等于进去就出不来。重启则留在同一个进程里，网卡还在。
+LOG "安装完成 ✓ 即将重启（不关机）—— 留在创建它的进程里，网卡不会消失"
+sync
+systemctl reboot || reboot -f
 INSTALLER
 chmod 0755 "$ROOTFS/usr/local/sbin/hvm-install-to-disk.sh"
 
