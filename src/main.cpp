@@ -134,7 +134,7 @@ void usage() {
         "  --vm <名字>     目标虚拟机名，默认 virtualized_linux\n"
         "\n"
         "状态:\n"
-        "  info                    汇总状态（能力/活动 VM/版本/共享目录）\n"
+        "  info                    汇总状态（能力/当前 VM/版本/共享目录）\n"
         "  list                    枚举我们自己记录的虚拟机清单（见 preferences 下的清单文件）\n"
         "  vmlog [-f]              只打印虚拟机串口日志（-f 跟随；其它模块的日志不打印）\n"
         "  vms [名字...]           按已知名字探测虚拟机（服务端无枚举接口）\n"
@@ -176,12 +176,12 @@ void usage() {
 
         "  screen-lock-task on|off 锁屏任务开关\n"
         "  tablet <int>            平板切换上报\n"
-        "  vminfo                  活动虚拟机的 DDR 大小（GB）与进程 PID\n"
+        "  vminfo                  当前虚拟机的 DDR 大小（GB）与进程 PID\n"
         "  stratovirt-mem          stratoVirt 占用内存（KB）\n"
         "  host-sn                 宿主 SN\n"
         "  capability              本机是否支持虚拟化\n"
-        "  active-name             活动虚拟机名\n"
-        "  active-status           活动虚拟机状态码\n"
+        "  active-name             当前虚拟机名\n"
+        "  active-status           当前虚拟机状态码\n"
         "  vmstat [名字]           指定虚拟机状态码\n"
         "  process-exist <进程名>  进程是否存在\n"
         "  feature <ID>            特性是否支持\n"
@@ -324,7 +324,7 @@ int cmdInfo(Client &c) {
         return 0;
     }
     printRow("虚拟化能力", vi.capable ? "支持" : "不支持");
-    printRow("活动虚拟机", vi.activeVm.empty() ? "(无)" : vi.activeVm);
+    printRow("当前虚拟机", vi.activeVm.empty() ? "(无)" : vi.activeVm);
     printRow("状态码", std::to_string(vi.activeStatus) + " (" +
                           hvm::statusName(vi.activeStatus) + ")");
     printRow("openEuler 版本",
@@ -429,7 +429,7 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
     if (cmd == "pause") {
         int rc = c.pauseVm();
         if (rc != 0) return fail(cmd, rc, "PauseVm 失败");
-        printf("已请求暂停活动虚拟机\n");
+        printf("已请求暂停当前虚拟机\n");
         return 0;
     }
     if (cmd == "resume") {
@@ -732,9 +732,9 @@ int printVmTable(Client &c, const std::string &cmd,
         printf("%s\n", j.ok().c_str());
         return 0;
     }
-    printf("活动虚拟机: %s\n", active.empty() ? "(无)" : active.c_str());
+    printf("当前虚拟机: %s\n", active.empty() ? "(无)" : active.c_str());
     printf("%s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
-           padTo("活动", 8).c_str(), "磁盘镜像");
+           padTo("当前", 8).c_str(), "磁盘镜像");
     for (const auto &n : names) {
         int st = 0;
         c.vmStatus(n, st);
@@ -1231,7 +1231,7 @@ int run(int argc, char **argv) {
         // 不是 MB —— 早先按 MB 打印是错的。
         uint32_t ddrGb = 0, pid = 0;
         int rc = c.getVmInfo(ddrGb, pid);
-        if (rc != 0) return fail(cmd, rc, "GetVmInfo 失败（可能没有活动虚拟机）");
+        if (rc != 0) return fail(cmd, rc, "GetVmInfo 失败（可能没有当前虚拟机）");
         if (g_json) {
             Json j(cmd);
             j.num("ddrSizeGb", ddrGb).num("vmPid", pid);

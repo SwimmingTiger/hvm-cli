@@ -192,9 +192,11 @@ class Client {
     //: 出参为 (虚拟机 DDR 大小 MB, 虚拟机进程 PID)
     int getVmInfo(uint32_t &ddrSizeMb, uint32_t &vmPid);
     //: stratoVirt 占用内存（MB）
-    //: GetStratovirtMem 返回 int64_t，单位为**字节**（实测 11061624 B ≈ 10.5 MiB）
+    //: GetStratovirtMem 返回 int64_t，单位为 **KB**
+    //:   （实测：与引擎进程 VmRSS(kB) 同步采样，量级一致、同向变化 —— 224658/377828、
+    //:    701566/810664；若真是字节比值会是 0.001 量级。早先按字节记录是错的。）
     int stratovirtMem(int64_t &bytes);
-    //: 关机流程使用的活动状态
+    //: 关机流程使用的当前状态
     int activeVmStatusForShutdown(int &out);
     //: 宿主 SN
     int hostSn(std::string &out);

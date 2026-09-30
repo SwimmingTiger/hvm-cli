@@ -369,7 +369,7 @@ hvm::CfgInfoBuilder::setCpuNum(int):
 创建后：
 
 ```
-活动虚拟机 : win11
+当前虚拟机 : win11
 磁盘镜像   : /data/service/el0/virt_service/100/vm_manager/177c554b/win11/img/vm.qcow2
 状态码     : 9（实测：stratoVirt 进程在跑、vminfo 能取到 PID）
 ```
@@ -670,7 +670,7 @@ ui/src/ohui_srv/msg_handle.rs:466   received focus-out event
 
 ### 13.4 顺带结论：各家应用的虚拟机互相隔离
 
-- 活动虚拟机名是全局的（能看到 `com.oseasy1.ohvm`）；
+- 当前虚拟机名是全局的（能看到 `com.oseasy1.ohvm`）；
 - 但**别的应用创建的虚拟机**对我们等于不存在：`disk path` 为空、`disk size` 为 0、
   `net ip` 返回 405、`snapshot list` 报 `the qcow2 does not exist`；
   服务端 `CheckMultipleVmState` 里确实用 `GetAppIdByCallingUid` + MD5 计算调用方身份；

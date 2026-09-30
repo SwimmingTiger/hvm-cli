@@ -23,7 +23,7 @@
 | `openeuler` | 连入**融合开发引擎**（内部代号 RGM / LinuxFusion）的 openEuler 环境执行命令 | `/system/lib64/ndk/libfusion_pty_ndk.so`（virtio-vsock PTY） |
 
 > 两者互不依赖：`hvm-cli` 走 Binder IPC 到 `vm_manager`；`openeuler` 走 LinuxFusion
-> 的 PTY 通道。系统里 `hvm-cli` 的"活动虚拟机"与 `openeuler` 连进去的 openEuler
+> 的 PTY 通道。系统里 `hvm-cli` 的"当前虚拟机"与 `openeuler` 连进去的 openEuler
 > 环境**不是同一个东西**（前者由 vm_manager 管理，后者由 LinuxFusion 管理）。
 
 ## hvm-cli：虚拟机管理
@@ -184,8 +184,8 @@ $ strings /data/log/hwf_service/vmlog
 
 ```console
 $ ./hvm-cli vms myvm
-活动虚拟机: myvm
-名字                     状态     活动     磁盘镜像
+当前虚拟机: myvm
+名字                     状态     当前     磁盘镜像
 myvm                     9        是       /data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/myvm.qcow2
 
 $ pgrep -a stratovirt | grep myvm        # create 那次启动时命令行里能看到两张光盘的 file=
@@ -225,7 +225,7 @@ $ ./hvm-cli mount-cd --name myvm \
 ### 4. 暂停 / 恢复
 
 ```console
-$ ./hvm-cli pause                  # 暂停活动虚拟机
+$ ./hvm-cli pause                  # 暂停当前虚拟机
 $ ./hvm-cli resume myvm            # 恢复
 ```
 
@@ -256,7 +256,7 @@ $ ./hvm-cli destroy myvm
 ```console
 $ ./hvm-cli list                         # 枚举我们创建过的虚拟机（读本地清单）
 $ ./hvm-cli vms                          # 已知虚拟机一览
-$ ./hvm-cli active-name                  # 当前活动虚拟机
+$ ./hvm-cli active-name                  # 当前当前虚拟机
 $ ./hvm-cli vmstat myvm               # 状态码（0=未运行 9=运行中）
 $ ./hvm-cli --vm myvm disk path           # 磁盘镜像路径
 $ ./hvm-cli --vm myvm disk capacity       # 磁盘容量
@@ -313,7 +313,7 @@ $ ./hvm-cli --vm win11 disk path
 /data/service/el0/virt_service/100/vm_manager/<hash>/win11/img/vm.qcow2
 ```
 
-> **实测已能完整创建虚拟机**（`CreateVm` 返回 0）：活动 VM 变成新名字、
+> **实测已能完整创建虚拟机**（`CreateVm` 返回 0）：当前 VM 变成新名字、
 > 框架自动生成磁盘 `.../vm_manager/<hash>/<vm>/img/vm.qcow2`（稀疏，随写增长）。
 
 > ✅ **安装介质能挂上**（实测）：ISO 路径写成上面那种**媒体库视图**即可 ——
