@@ -724,6 +724,7 @@ int printVmTable(Client &c, const std::string &cmd,
                    "\",\"rc\":" + std::to_string(rc) +
                    ",\"status\":" + std::to_string(st) +
                    ",\"active\":" + ((names[i] == active) ? "true" : "false") +
+                   ",\"exists\":" + (path.empty() ? "false" : "true") +
                    ",\"diskImage\":\"" + jsonEscape(path) + "\"}";
         }
         arr += "]";
@@ -735,17 +736,34 @@ int printVmTable(Client &c, const std::string &cmd,
     printf("当前虚拟机: %s\n", active.empty() ? "(无)" : active.c_str());
     printf("%s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
            padTo("当前", 8).c_str(), "磁盘镜像");
+    std::vector<std::string> stale;
     for (const auto &n : names) {
         int st = 0;
         c.vmStatus(n, st);
         std::string path;
         c.diskImagePath(n, path);
+        if (path.empty()) stale.push_back(n);   // 没有磁盘 = 服务端已不存在（已销毁）
         printf("%s %s %s %s\n", padTo(n, 24).c_str(),
                padTo(std::to_string(st), 8).c_str(),
                padTo(n == active ? "是" : "否", 8).c_str(),
-               path.empty() ? "(无)" : path.c_str());
+               path.empty() ? "(无，已失效)" : path.c_str());
+    }
+    if (!stale.empty()) {
+        printf("提示：上面标记为「已失效」的 %zu 条在服务端已不存在（已销毁）；\n"
+               "      清单文件是纯文本，可直接删掉这些名字：%s\n",
+               stale.size(), kRegistryPath);
     }
     return 0;
+}
+
+//: 判断虚拟机在服务端是否还存在。
+//: 只能靠"磁盘镜像路径是否为空" —— 状态码 0 对"已停止"和"已销毁"是同一个值，
+//: 拿它判断存在性会把已销毁的虚拟机当成还在（这正是本项目踩过的坑）。
+bool vmExists(Client &c, const std::string &name, std::string *diskOut = nullptr) {
+    std::string path;
+    const int rc = c.diskImagePath(name, path);
+    if (diskOut != nullptr) *diskOut = path;
+    return rc == 0 && !path.empty();
 }
 
 // ---------------------------------------------------------------- vm 子命令
@@ -1049,8 +1067,17 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         if (rc != 0)
             return fail("vm destroy", rc,
                         std::string("DestroyVm 失败: ") + ohos_vm_error_name(rc));
-        if (g_json) { Json j("vm destroy"); j.str("name", name); printf("%s\n", j.ok().c_str()); }
-        else printf("已销毁 %s\n", name.c_str());
+        // 结束后确认一次：销毁是否真的生效，看服务端还有没有这台虚拟机的磁盘
+        const bool gone = !vmExists(c, name);
+        if (g_json) {
+            Json j("vm destroy");
+            j.str("name", name).boolean("gone", gone);
+            printf("%s\n", j.ok().c_str());
+        } else if (gone) {
+            printf("已销毁 %s ✓（已确认服务端不再有这台虚拟机）\n", name.c_str());
+        } else {
+            printf("已销毁 %s（服务端仍能查到它的磁盘，可能稍后才清完）\n", name.c_str());
+        }
         // 自己维护清单：从记录里移除（失败只提示，不影响销毁结果）
         if (!registryRemove(name))
             fprintf(stderr, "提示: 虚拟机已销毁，但清单更新失败（%s）\n", kRegistryPath);
@@ -1214,10 +1241,14 @@ int run(int argc, char **argv) {
                 printf("%s\n", j.ok().c_str());
             } else {
                 printf("清单为空（%s）\n", kRegistryPath);
-                printf("新建虚拟机后会自动记录，例如：\n");
+                printf("新建或导入虚拟机后会自动记录。例如：\n");
+                printf("  # 从 ISO 全新安装\n");
                 printf("  ./hvm-cli vm create --name myvm --image <ISO> --enhance <ISO> "
                        "--bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi "
                        "--cpu 6 --mem 6 --disk-gb 64\n");
+                printf("  # 导入现成的 qcow2（镜像放下载目录即可；名字需尚不存在）\n");
+                printf("  ./hvm-cli vm import --name myvm --src <镜像文件>\n");
+                printf("  ./hvm-cli vm start  --name myvm --cpu 6 --mem 6\n");
             }
             return 0;
         }
@@ -1343,10 +1374,14 @@ int run(int argc, char **argv) {
         std::string vm = a.pos.empty() ? a.vm : a.pos[0];
         int rc = c.vmStatus(vm, st);
         if (rc != 0) return fail(cmd, rc, "GetVmStatus 失败");
+        // 状态码 0 分不清"已停止"和"已销毁"，再查一次磁盘才能给出确定答案
+        const bool exists = (st != 0) || vmExists(c, vm);
         if (g_json) {
             Json j(cmd);
-            j.str("vm", vm).num("status", st);
+            j.str("vm", vm).num("status", st).boolean("exists", exists);
             printf("%s\n", j.ok().c_str());
+        } else if (!exists) {
+            printf("%s: 已不存在（已销毁）\n", vm.c_str());
         } else {
             printf("%s: %d (%s)\n", vm.c_str(), st, hvm::statusName(st));
         }

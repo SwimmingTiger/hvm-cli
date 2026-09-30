@@ -256,13 +256,18 @@ $ ./hvm-cli destroy myvm
 ```console
 $ ./hvm-cli list                         # 枚举我们创建过的虚拟机（读本地清单）
 $ ./hvm-cli vms                          # 已知虚拟机一览
-$ ./hvm-cli active-name                  # 当前当前虚拟机
-$ ./hvm-cli vmstat myvm               # 状态码（0=未运行 9=运行中）
+$ ./hvm-cli active-name                  # 当前虚拟机
+$ ./hvm-cli vmstat myvm                   # 状态码（0=未运行 9=运行中；已销毁会说"已不存在"）
 $ ./hvm-cli --vm myvm disk path           # 磁盘镜像路径
 $ ./hvm-cli --vm myvm disk capacity       # 磁盘容量
 $ ./hvm-cli --vm myvm snapshot list       # 快照列表
 $ ./hvm-cli --vm myvm net ip              # 客户机 IPv4（需客户机已联网）
 ```
+
+> **怎么知道一台虚拟机是不是已经被销毁？** 注意状态码 `0` 对「已停止」和「已销毁」
+> 是**同一个值**，不能拿它判断存在性。可靠依据是磁盘镜像：
+> `list` / `vms` 会把没有磁盘的条目标成 `(无，已失效)`，
+> `vmstat <名字>` 也会直接回答 `已不存在（已销毁）`。
 
 安装过程中的客户机文本输出（GRUB 菜单、控制台日志）见
 [「3. 启动」](#3-启动开机)一节的 `vmlog` / `vmlog -f` 用法。
