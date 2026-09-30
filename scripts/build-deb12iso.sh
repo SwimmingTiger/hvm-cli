@@ -109,14 +109,30 @@ fi
 apt-get update -qq
 # systemd-sysv 提供 /sbin/init（minbase 只有 systemd 本体，缺它会掉进 initramfs 急救 shell）。
 # live-boot/live-config 负责把 squashfs 挂成根 —— 这是「基于 squashfs」的关键一环。
+# 常见压缩算法都装上：initramfs-tools 会优先选 zstd 生成 initrd（比 gzip 更小更快），
+# 没有它就会打出 "No zstd in /usr/bin:/sbin:/bin, using gzip" 并退回 gzip；
+# xz/bzip2/lz4 一并装上，便于排错与手动生成。注意 zstd 压缩的 initrd 需要客户机内核
+# 支持（Debian 的 linux-image-arm64 带 CONFIG_RD_ZSTD ✓）。
 apt-get install -y --no-install-recommends \
     linux-image-arm64 grub-efi-arm64 openssh-server \
     ca-certificates iproute2 systemd-resolved systemd-sysv \
-    live-boot live-config squashfs-tools e2fsprogs dosfstools gdisk parted
+    live-boot live-config squashfs-tools e2fsprogs dosfstools gdisk parted \
+    zstd xz-utils bzip2 lz4
 if [ -x /usr/sbin/update-initramfs.disabled-for-install ]; then
     mv /usr/sbin/update-initramfs.disabled-for-install /usr/sbin/update-initramfs
 fi
 CHROOT
+
+# ★ 装了 zstd 之后 initramfs-tools 会默认用它压缩 initrd —— 但 zstd 压缩的 initrd
+#   需要客户机内核带 CONFIG_RD_ZSTD（Debian 的 linux-image-arm64 有）。先查一下内核配置，
+#   万一带的是没有 zstd 支持的内核，就显式退回 gzip，避免装完开不了机。
+if grep -qs '^CONFIG_RD_ZSTD=y' "$ROOTFS"/boot/config-*; then
+    LOG "内核支持 zstd 压缩的 initrd ✓（用 zstd，比 gzip 更小）"
+else
+    LOG "内核未声明 CONFIG_RD_ZSTD —— 显式退回 gzip 压缩 initrd"
+    mkdir -p "$ROOTFS/etc/initramfs-tools/conf.d"
+    printf 'COMPRESS=gzip\n' > "$ROOTFS/etc/initramfs-tools/conf.d/compress"
+fi
 
 # 现在所有包（含 live-boot 的 initramfs 钩子）都到位了，真正重建一次 initrd。
 # 少了这一步，内核命令行里写了 boot=live 也没人处理。
