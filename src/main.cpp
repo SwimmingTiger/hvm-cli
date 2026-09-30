@@ -1370,7 +1370,16 @@ int run(int argc, char **argv) {
             emitVmLog(more, &inGuest, nullptr);
             fflush(stdout);
             pos = more.tellg();
-            if (pos == std::streampos(-1)) pos = 0;
+            if (pos < 0) {
+                // ★ 读到 EOF 后 failbit 置位，tellg() 返回 -1。这里**绝不能退回 0** ——
+                //   那会让每一轮都把整个日志从头重打一遍（表现：屏幕一直刷旧内容，
+                //   即使所有虚拟机都停机。实测踩到）。正确做法与开局一致：
+                //   clear() 之后 seekg(end) 取真实末尾位置。
+                more.clear();
+                more.seekg(0, std::ios::end);
+                pos = more.tellg();
+                if (pos < 0) pos = 0;
+            }
         }
         return 0;
     }
