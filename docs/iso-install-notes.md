@@ -7,8 +7,11 @@
 > * 已实测通过：ISO 构建（含 `efi.img` 大小自检）、`audit-iso.sh` 全项（`efi.img` 内容 +
 >   squashfs 17 项 + initrd 的 live-boot 机制）、`create --image <我们的 ISO>` 被框架接受
 >   （兼容标记 8/8 命中）、**固件成功引导进 GRUB**（`Welcome to GRUB!`）。
-> * 待实测：GRUB 定位到 ISO 后的内核/live-boot/安装器全流程，以及装完重启后的
->   `./hvm-cli net ip` 与 `ssh root@172.16.100.2`（本文的 §3 正是这一步的风险点）。
+> * 已实测通过（全部）：GRUB →内核 → live-boot 挂 squashfs → 安装器分区/解压/装 GRUB → 自动关机；
+>   重启后从**磁盘**引导起装好的系统；**从设备 `ssh root@172.16.100.2` 登录成功**，
+>   客户机里 `enp0s6` 上带静态地址 `172.16.100.2/24`。
+> * 仍未拿到：`./hvm-cli net ip` 返回 405（框架侧那条查询没拿到客户机地址）。网络本身是通的
+>   —— SSH 就是证据 —— 所以这属于框架查询路径的问题，不是镜像问题。
 
 ## 1. 为什么要做成 ISO，而不是直接给一个 qcow2
 
@@ -101,7 +104,18 @@ if (!QcowDisk) {
 而 **5005 = "磁盘无需处理"**（两条判断最前面就 `return 0`）。
 `ImportVmDiskImage` 建出来的虚拟机没有 `CfgInfo`，因此这条路要特别留意。
 
-## 4. 踩过的坑（按出现顺序）
+## 4. 关键：网络字段必须在 **create** 时就给
+
+实测结论（很重要）：
+
+* `hvm-cli create --name X --image <ISO> ... --net nat` → 虚拟机**有网卡**
+  （命令行里能看到 `virtio-net-pci,netdev=net0,id=nic0` 与宿主侧 tap `WVMTap…`）✓
+* 同样的 `--net nat` 只加在 `start` 上 → **没有网卡** ✗
+
+即网络配置要进 `create` 时那份**存档配置**里；`StartVm` 传的 `CfgInfo` 起不到这个作用
+（与 §3 的磁盘检查门槛共同作用）。所以发布流程里 `create` 必须带 `--net nat`。
+
+## 5. 踩过的坑（按出现顺序）
 
 1. **`mkfs.vfat -F 32` 用在 8 MiB 映像上 ⇒ 空 efi.img。**
    FAT32 规范要求至少约 33 MiB；强行 `-F 32` 会产出一个 mtools 和 UEFI 固件都读不了的 FAT：
@@ -129,13 +143,37 @@ if (!QcowDisk) {
    **做法**：额外 `grub-mkconfig -o /boot/efi/EFI/BOOT/grub.cfg` 在 ESP 上再放一份
    （这份 cfg 自带 `search --fs-uuid --set=root`，会把 root 自动定位回根分区）。
 
-6. **框架的 ISO 校验（见 §1.2）。** 非 UOS 调用方必须命中 Windows 安装盘特征串，
+6. **squashfs 里必须保留 `dev/ proc/ sys/ run/ tmp/ mnt/` 这些【目录】。**
+   最初用 `mksquashfs -e dev -e proc …` 把**目录本身**也排掉了，于是 live 系统把它当根挂上后
+   `/dev` `/proc` 等挂载点根本不存在 → init 无法 bind-mount、连 `/dev/console` 都打不开 →
+   `Kernel panic - not syncing: Attempted to kill init!`。
+   **做法**：排除写 `-e 'proc/*'`（只排内容，保留目录），安装器解压后再 `mkdir -p` 补一遍。
+
+7. **分区设备名不能照搬 loop 的写法。**
+   安装器里写 `"${DISK}p1"`，而 `DISK=/dev/vda` → 拼成 `/dev/vdap1`（不存在），
+   `mkfs.vfat` 报 `No such file or directory`，脚本一直在等 `/dev/vdap2`。
+   **做法**：只有结尾是数字的设备名才加 `p`（`nvme0n1p1`/`loop0p1`），
+   `case "$DISK" in *[0-9]) P="${DISK}p";; *) P="${DISK}";; esac`。
+
+8. **`sed -i` 会把文件权限重置成 0644。**
+   用它改安装器脚本后，systemd 的 `ExecStart` 直接执行失败，
+   而且 exec 阶段的失败**只进 journal**，串口上什么也看不到 —— 现象就是
+   `[FAILED] Failed to start hvm-install…` 而脚本一动不动。
+   **做法**：改完 `chmod 0755` 补回可执行位；排查时用 `ExecStart=/bin/bash -x <脚本>`。
+
+9. **Debian 的 sshd 默认 `PermitRootLogin prohibit-password`。**
+   现象：SSH **连得上**（拿到主机密钥）但只提供 `publickey`：
+   `root@172.16.100.2: Permission denied (publickey)`。
+   **做法**：镜像里放 `/etc/ssh/sshd_config.d/10-root-password.conf`：
+   `PermitRootLogin yes` + `PasswordAuthentication yes`（发布镜像务必改掉 ROOT_PASS）。
+
+10. **框架的 ISO 校验（见 §1.2）。** 非 UOS 调用方必须命中 Windows 安装盘特征串，
    所以脚本在 ISO 树里放了 `sources/install.wim` 等同名空文件，**并且**放一个
    `HVM-COMPAT.TXT`，把这些串作为**文件内容**写进去 —— 因为 ISO9660 目录名是分段存储
    且会大写，光靠同名路径拼不出带斜杠的整串，而校验做的是**原始字节搜索**。
    `-R`（Rock Ridge）用于保留小写原名。
 
-## 5. 产物与验证
+## 6. 产物与验证
 
 ```bash
 # 构建（在 openEuler 里）

@@ -157,6 +157,15 @@ ExecStartPre=/bin/sh -c 'ssh-keygen -A'
 ExecStartPre=/usr/sbin/sshd -t
 EOF
 
+# 允许 root 用密码登录：Debian 的 sshd 默认 PermitRootLogin prohibit-password，
+# 实测表现为 SSH 连得上但只提供 publickey（"Permission denied (publickey)"）。
+# 本工具就是要 root 登录（发布镜像请务必改掉 ROOT_PASS）。
+mkdir -p "$ROOTFS/etc/ssh/sshd_config.d"
+cat > "$ROOTFS/etc/ssh/sshd_config.d/10-root-password.conf" <<'SSHD'
+PermitRootLogin yes
+PasswordAuthentication yes
+SSHD
+
 # ---------------------------------------------------------------- 3) 自动安装器
 # 只在「live 引导 + 命令行带 install=1」时动磁盘，避免误伤。
 # 注意本 heredoc 用 <<INSTALLER（不加引号）：$TARGET_DISK 在**构建期**展开，
@@ -166,6 +175,12 @@ cat > "$ROOTFS/usr/local/sbin/hvm-install-to-disk.sh" <<INSTALLER
 # ISO 引导起来后自动执行：分区 → mkfs → 解压 squashfs → 装 GRUB → 关机
 set -euo pipefail
 DISK="$TARGET_DISK"
+# 分区设备名：只有结尾是数字的设备才需要 p 后缀（nvme0n1p1 / loop0p1），
+# 而 /dev/vda 的正确名字是 /dev/vda1 —— 这里此前照搬 loop 的写法错了，实测踩到。
+case "$DISK" in
+    *[0-9]) P="${DISK}p" ;;
+    *)       P="${DISK}"  ;;
+esac
 LOG() { echo "[\$(date +%H:%M:%S)] \$*" | tee -a /dev/console; }
 
 LOG "安装开始：目标盘 \$DISK"
@@ -186,14 +201,14 @@ sgdisk --zap-all "\$DISK" >/dev/null
 sgdisk -n 1:2048:+512M -t 1:ef00 -c 1:ESP  "\$DISK" >/dev/null
 sgdisk -n 2:0:0       -t 2:8300 -c 2:root "\$DISK" >/dev/null
 partprobe "\$DISK" || true
-for _ in \$(seq 1 50); do [ -b "\${DISK}p2" ] && break; sleep 0.2; done
-mkfs.vfat -F 32 -n ESP "\${DISK}p1" >/dev/null
-mkfs.ext4 -q -F -L root "\${DISK}p2"
+for _ in \$(seq 1 50); do [ -b "\${P}2" ] && break; sleep 0.2; done
+mkfs.vfat -F 32 -n ESP "\${P}1" >/dev/null
+mkfs.ext4 -q -F -L root "\${P}2"
 
 mkdir -p /target
-mount "\${DISK}p2" /target
+mount "\${P}2" /target
 mkdir -p /target/boot/efi
-mount "\${DISK}p1" /target/boot/efi
+mount "\${P}1" /target/boot/efi
 
 LOG "解压 squashfs 到目标根分区"
 # 这里**不要**加任何 -ex/-e 排除项：实测 Debian 12 的 unsquashfs 里
@@ -205,8 +220,8 @@ unsquashfs -f -d /target "\$SQ" >/dev/null
 # 补建运行时目录：squashfs 里没有它们，但装好的系统需要这些挂载点
 mkdir -p /target/proc /target/sys /target/dev /target/run /target/tmp /target/mnt
 
-ROOT_UUID=\$(blkid -s UUID -o value "\${DISK}p2")
-ESP_UUID=\$(blkid -s UUID -o value "\${DISK}p1")
+ROOT_UUID=\$(blkid -s UUID -o value "\${P}2")
+ESP_UUID=\$(blkid -s UUID -o value "\${P}1")
 cat > /target/etc/fstab <<FSTAB
 UUID=\$ROOT_UUID	/	ext4	errors=remount-ro	0	1
 UUID=\$ESP_UUID	/boot/efi	vfat	umask=0077		0	1
@@ -281,9 +296,12 @@ cp "$ROOTFS"/boot/vmlinuz-*    "$ISOTREE/live/vmlinuz"
 cp "$ROOTFS"/boot/initrd.img-* "$ISOTREE/live/initrd.img"
 # 注意：**不能**排除 boot —— 装到磁盘后 /boot 里必须有内核与 grub.cfg
 # 压缩算法可用 SQ_COMP 覆盖（xz 最小最慢 / gzip 快，见文件头的说明）。
-# -e 排除的运行时目录：安装器解压时就能直接全解，不必再做排除（-ex 的语义有坑，见安装器注释）。
+# -e 排除的是这些目录的【内容】而不是目录本身（写成 -e proc 会把目录也排掉，
+# 于是 live 系统把 squashfs 当根挂上后 /dev /proc /sys /run 不存在 → init 无法 bind-mount
+# → 连 /dev/console 都打不开 → init 退出 → Kernel panic。实测踩到过）。
 mksquashfs "$ROOTFS" "$ISOTREE/live/filesystem.squashfs" \
-    -comp "$SQ_COMP" -noappend -e proc -e sys -e dev -e run -e tmp -e mnt >/dev/null
+    -comp "$SQ_COMP" -noappend \
+    -e 'proc/*' -e 'sys/*' -e 'dev/*' -e 'run/*' -e 'tmp/*' -e 'mnt/*' >/dev/null
 
 # ---------------------------------------------------------------- 5) UEFI 引导
 LOG "5/6 生成 EFI 引导镜像"
