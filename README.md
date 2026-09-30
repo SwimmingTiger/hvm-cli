@@ -432,7 +432,9 @@ make install      # 可选，装到 ~/.local/bin
 ```bash
 # 在一台 arm64 Debian/Ubuntu 上（需要 qemu-utils debootstrap gdisk dosfstools parted）
 sudo apt-get install -y qemu-utils debootstrap gdisk dosfstools parted
-sudo scripts/build-deb12min.sh /tmp/deb12min.qcow2 8G     # [输出路径] [虚拟大小，默认 8G]
+# 用法：[输出路径] [整盘虚拟大小] [根文件系统]
+sudo scripts/build-deb12min.sh /tmp/deb12min.qcow2 8G          # 默认 ext4
+sudo scripts/build-deb12min.sh /tmp/out.qcow2     100G btrfs   # 根用 btrfs，整盘 100G
 
 # 把 qcow2 放到设备上，然后导入并启动（名字必须尚不存在）
 ./hvm-cli import --name deb12min --src /storage/Users/currentUser/Download/deb12min.qcow2
@@ -442,13 +444,22 @@ sudo scripts/build-deb12min.sh /tmp/deb12min.qcow2 8G     # [输出路径] [虚�
 
 镜像内容与设计（细节见脚本头部注释）：
 
-- **分区**：512 MiB ESP（FAT32）+ ext4 根分区，并放好 `EFI/BOOT/BOOTAA64.EFI`（stratovirt 走 UEFI 引导）；
+- **分区**：512 MiB ESP（FAT32）+ 根分区，并放好 `EFI/BOOT/BOOTAA64.EFI`（stratovirt 走 UEFI 引导）；
+  **根分区自动用满 ESP 之外的全部剩余空间**（脚本会把算出来的大小打印出来）；
+- **根文件系统**：第 3 个参数指定，支持 `ext4`（默认）/ `xfs` / `btrfs` ——
+  脚本会按类型选择 `mkfs` 参数、fstab 选项与 fsck pass，并在客户机里附上对应的维护工具
+  （`xfsprogs` / `btrfs-progs`）；配好 fstab 后会**重建一次 initramfs**，
+  确保根文件系统的驱动真的在 initrd 里；
 - **内核参数**：`console=ttyAMA0,115200`（串口，`vmlog` 读的就是它）
   加 `modprobe.blacklist=vmwgfx`（屏蔽该模块，与 `modprobe.d` 里的 blacklist 双保险）；
-- **网络**：`systemd-networkd` + `en*`/`eth*` 通配 DHCP，换环境不用改配置；
+- **网络**：`systemd-networkd` 配**静态 IP** `172.16.100.2/24`、网关 `172.16.100.1`、
+  DNS `114.114.114.114`（框架的虚拟网络就是 `172.16.100.0/24`、网关 `.1`；**不设 DHCP**
+  —— 实测框架侧不保证提供 DHCP）。可用 `VM_IP` / `VM_GW` / `VM_DNS` 覆盖；
 - **登录**：默认 `root` / `root`（可用环境变量 `ROOT_PASS` 覆盖 —— **发布前请务必改掉**）；
-- **发布卫生**：清空 `/etc/machine-id`、删除预生成的 SSH 主机密钥，并加一个
-  `ssh-keygen -A` 的 drop-in，让每台实例首启生成自己的密钥；
+- **发布卫生**：清空 `/etc/machine-id`、删除预生成的 SSH 主机密钥，并加一个 `ssh-keygen -A`
+  的 drop-in（先用空赋值清空主单元继承来的 `ExecStartPre`，再用 `/bin/sh -c` 走 PATH 调用
+  —— Debian 的 `ssh-keygen` 在 `/usr/bin`，写死 `/usr/sbin` 会让它静默失败），
+  让每台实例首启生成自己的密钥；
 - **体积**：只装 `--no-install-recommends`，装完清 apt 缓存与 lists，最后用 `fstrim`
   配合 `qemu-nbd --discard=unmap` 把已删文件的块真正还给 qcow2。
 
