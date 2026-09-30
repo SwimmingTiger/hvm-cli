@@ -113,16 +113,11 @@ CreateVm 返回 rc=0 (OK)
 这条路**不需要**先 `create` —— 导入这个动作本身就会创建虚拟机。
 
 ```console
-# 1) 镜像放到服务端读得到的位置（用户下载目录即可，CLI 会自动转换成服务端视图），
-#    并把它的 SHA-256 算成【大写】十六进制
-$ SHA=$(sha256sum debian12.qcow2 | cut -d' ' -f1 | tr a-f A-F)
-
-# 2) 导入：--src 是源镜像的【完整文件路径】，--dst 是该文件的 SHA-256
-#    虚拟机名必须是【尚不存在】的
+# 1) 把镜像放到服务端读得到的位置：用户下载目录即可，CLI 会自动转换成服务端视图
+# 2) 导入：--name 是新虚拟机名（必须尚不存在），--src 是镜像文件的完整路径
 $ ./hvm-cli import --name debian13 \
-      --src /storage/Users/currentUser/Download/debian12.qcow2 \
-      --dst "$SHA"
-已提交导入：...（sha256 ...）→ 虚拟机 debian13
+      --src /storage/Users/currentUser/Download/debian12.qcow2
+已提交导入：/storage/Users/currentUser/Download/debian12.qcow2 → 虚拟机 debian13
 
 # 3) 导入出来的虚拟机还没有配置参数，启动时必须显式给 CPU / 内存
 $ ./hvm-cli start --name debian13 --cpu 6 --mem 6
@@ -130,15 +125,15 @@ StartVm 返回 rc=0 (OK)
 ```
 
 - **导入即建机**：名字必须**尚不存在**（已存在会报目标磁盘已存在），导入成功后会登记进本地清单；
-- **SHA-256 必须大写**：服务端逐字节比较，传小写会被判成「镜像损坏」
-  （`src disk img was broken`）—— 这是最容易踩的一点；
 - 导入出来的虚拟机**没有 CPU/内存配置**，所以 `start` 必须带上 `--cpu`、`--mem`；
 - 想知道它有没有正常开机，看串口：`./hvm-cli vmlog`（看到 `Debian GNU/Linux ... ttyAMA0`
   登录横幅即为成功）；
-- 参数语义、服务端四条校验分支、以及"两种哈希不是一回事"的细节见
-  [api-notes 第 11 节](docs/api-notes.md)。
-- 反方向（把某台虚拟机的磁盘**导出**成文件）以及更完整的示例见
-  [hvm-cli：导出与导入虚拟机磁盘](#hvm-cli导出与导入虚拟机磁盘)。
+- 导入完成后它就和你自己装的虚拟机完全一样：`stop` / `force-stop` / `snapshot` / `disk`
+  等命令都能用。
+
+> 进阶用法（自己提供摘要、导出方向、服务端校验细节）见
+> [hvm-cli：导出与导入虚拟机磁盘](#hvm-cli导出与导入虚拟机磁盘) 与
+> [api-notes 第 11 节](docs/api-notes.md)。
 
 **两条路怎么选**：
 
@@ -336,12 +331,15 @@ $ ./hvm-cli export --name debian12 \
       --dst debian12.qcow2
 已提交导出：/data/service/el2/100/hmdfs/... -> debian12.qcow2
 
-# 导入：--src 是「源镜像的完整文件路径」，--dst 是该文件的 SHA-256
-#       ★ 必须是大写十六进制
-$ SHA=$(sha256sum debian12.qcow2 | cut -d' ' -f1 | tr a-f A-F)
+# 导入：--src 是「源镜像的完整文件路径」
+#       （--dst 可省略：省略时本工具会用内置 SHA-256 多线程现算，见下面第 2 点）
 $ ./hvm-cli import --name debian13 \
-      --src /storage/Users/currentUser/Download/debian12.qcow2 --dst "$SHA"
-已提交导入：...（sha256 ...）→ 虚拟机 debian13
+      --src /storage/Users/currentUser/Download/debian12.qcow2
+已提交导入：/storage/Users/currentUser/Download/debian12.qcow2 → 虚拟机 debian13
+
+# 进阶：自己给摘要（例如已经在别处算好）。大小写随意，本工具会自动转成大写
+$ SHA=$(sha256sum debian12.qcow2 | cut -d' ' -f1)
+$ ./hvm-cli import --name debian13 --src .../debian12.qcow2 --dst "$SHA"
 
 # 导入出来的虚拟机还没有配置参数，启动时必须显式给 CPU / 内存
 $ ./hvm-cli start debian13 --cpu 6 --mem 6
@@ -354,8 +352,11 @@ $ ./hvm-cli vmlog
 三个容易踩的点：
 
 1. **两个方向的参数含义不同** —— `export` 是「目标目录 + 文件名」，
-   `import` 是「源镜像的完整文件路径 + 该文件的 SHA-256」；
-2. **SHA-256 必须大写** —— 服务端逐字节比较，传小写会被判成「镜像损坏」（`src disk img was broken`）；
+   `import` 是「源镜像的完整文件路径」（摘要可省，见下条）；
+2. **摘要可选，且大小写自动处理** —— 不传 `--dst` 时，本工具用**内置 SHA-256** 现算：
+   多线程预读 + ARMv8 加密指令（实测约 1.8 GB/s，633 MB 的镜像 0.35 秒算完）；
+   传了 `--dst` 也会**自动转成大写**（服务端逐字节比较，小写会被判成「镜像损坏」）；
+   单独验证/测速可用 `./hvm-cli sha256 <文件> [线程数]`；
 3. **导入用的虚拟机名必须尚不存在** —— 导入这个动作本身就会创建这台虚拟机；
    名字若已存在会报「目标磁盘已存在」。导入之后还要 `start <名字> --cpu N --mem M` 才会开机。
 
@@ -437,6 +438,7 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 | `ctor [选项]` | 只构造 `CfgInfo` 入参对象并打印字段布局，**不调服务端**（验证构造配方） |
 | `view-state <0\|1\|2>` / `displays <id>` | 上报 `HapViewState` / 显示器 id 列表（研究视图机制用） |
 | `serial-read` / `serial-write` | 读写客户机通道（`ChannelInfo`） |
+| `sha256 <文件> [线程数]` | 内置 SHA-256：多线程预读 + ARMv8 加密指令（实测 ~1.8 GB/s），也用于 `import` 自动算摘要 |
 | `hash-name` | 迁移用的 Hash 名（`GetHashName`；未发起过迁移时为空串） |
 | `selftest` | 两条通路的加载自检（`hvm-cli selftest` / `openeuler selftest`） |
 | `share-volumes` | 列出全部共享卷（`GetAllSharedVolume` 的返回元素类型未还原，命令保留但直接报错） |

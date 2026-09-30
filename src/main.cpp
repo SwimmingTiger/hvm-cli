@@ -20,6 +20,25 @@
 #include "cfginfo.h"
 #include "hvm_client.h"
 #include "ohos/vm_manager_service/vm_manager_errcode.h"
+#include "sha256.h"
+
+namespace {
+
+//: 计算源镜像摘要时的进度显示（写在 stderr，不污染正常输出）
+void importProgress(uint64_t done, uint64_t total) {
+    if (total == 0) return;
+    if (!isatty(STDERR_FILENO)) return;   // 重定向/管道时不刷屏
+    static uint64_t lastPct = 101;
+    const uint64_t pct = done * 100 / total;
+    if (pct != lastPct) {
+        lastPct = pct;
+        fprintf(stderr, "\r读取中 %llu%%", static_cast<unsigned long long>(pct));
+        if (pct >= 100) fprintf(stderr, "\n");
+        fflush(stderr);
+    }
+}
+
+}  // namespace
 
 namespace {
 
@@ -203,11 +222,10 @@ void usage() {
         "  disk capacity | disk path | disk size | disk expand <GB> | disk delete-data\n"
         "\n"
         "磁盘导出 / 导入（把某台虚拟机的磁盘导出成文件；或从镜像文件导入成一台新虚拟机）:\n"
-        "  export --name <虚拟机> --src <目标目录> --dst <文件名>      导出该虚拟机的磁盘\n"
-        "  import --name <新虚拟机名> --src <镜像文件> --dst <sha256>  从镜像导入成一台新虚拟机\n"
-        "      · <目标目录> 必须已存在；最终文件是 目录/文件名，导出后可直接在文件管理器里找到\n"
-        "      · <镜像文件> 给完整路径；<sha256> 必须是【大写】十六进制：\n"
-        "          sha256sum x.qcow2 | cut -d' ' -f1 | tr a-f A-F\n"
+        "  export --name <虚拟机> --src <目标目录> --dst <文件名>            导出该虚拟机的磁盘\n"
+        "  import --name <新虚拟机名> --src <镜像文件> [--dst <sha256>]      从镜像导入成一台新虚拟机\n"
+        "      · <目标目录> 必须已存在；最终文件是 目录/文件名，导出后可在文件管理器里找到\n"
+        "      · <镜像文件> 给完整路径；--dst 可省略（省略时本工具多线程现算摘要），大小写随意\n"
         "      · 导入用的虚拟机名必须【尚不存在】（导入动作本身就会创建这台虚拟机）\n"
         "      · import 建出的虚拟机还没有配置，启动时要显式给参数：start <名字> --cpu 6 --mem 6\n"
         "\n"
@@ -223,6 +241,7 @@ void usage() {
         "  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
         "  serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
         "  selftest                kit 加载自检\n"
+        "  sha256 <文件> [线程数]  计算文件 SHA-256（内置实现、多线程预读）\n"
         "  hash-name               迁移用的 Hash 名（未发起过迁移时为空）\n"
         "  share-volumes           列出全部共享卷（返回元素类型未还原，已禁用）\n"
         "  linux-path <宿主路径..> 宿主→客户机路径（服务端只允许 LinuxFusion 服务调用）\n"
@@ -738,6 +757,8 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     }
     const std::string act = pos[0];
     std::string name, image, bios, enhance;
+    // 用户给的原始写法（本机可读）；bios 之后会被换成服务端视图，本机读不到
+    std::string biosRaw;
     int cpu = 0, mem = 0, disk = 0, startType = -1;
     bool partition = false, dynMem = false;
     bool keepSnapshots = false, forceImport = false;
@@ -790,6 +811,7 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
 
     // 用户视图路径 → 媒体库视图（服务端与 stratovirt 都读得到）
     if (!bios.empty()) {
+        biosRaw = bios;                    // 留给"本机现算摘要"用
         std::string t = toServicePath(bios);
         if (t != bios) {
             if (!g_json)
@@ -908,30 +930,58 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     }
 
     if (act == "import") {
-        // 导入磁盘（服务端把源镜像拷成该虚拟机的磁盘）。参数语义（实测打通）：
-        //   --src = 源镜像的【完整文件路径】（服务端 realpath）
-        //   --dst = 该文件的【SHA-256 十六进制】，★ 必须【大写】（服务端逐字节比较）
-        // 另外：目标虚拟机名必须是【尚不存在】的（导入即建机；已存在会报
-        // "dest disk img file already exist"），启动时需显式给 --cpu/--mem。
-        if (name.empty() || bios.empty() || enhance.empty()) {
+        // 导入磁盘（服务端把源镜像拷成该虚拟机的磁盘）。实测语义：
+        //   --src = 源镜像的【完整文件路径】（服务端会对它做 realpath）
+        //   --dst = 该文件的 SHA-256，**可选**；不填就由本工具现算（多线程预读）
+        // 服务端逐字节比较摘要且要求【大写】，所以这里统一替用户转成大写。
+        // 另：目标虚拟机名必须【尚不存在】（导入这个动作本身就会建机）。
+        if (name.empty() || bios.empty()) {
             fprintf(stderr,
-                    "用法: hvm-cli vm import --name <新虚拟机名> --src <源镜像文件> --dst <sha256大写>\n"
-                    "      （--src 与 --bios 同义，--dst 与 --enhance 同义）\n"
-                    "      提示：sha256 需大写，如 sha256sum x.qcow2 | cut -d' ' -f1 | tr a-f A-F\n");
+                    "用法: hvm-cli import --name <新虚拟机名> --src <源镜像文件> [--dst <sha256>]\n"
+                    "      --dst 可省略：省略时由本工具计算源文件的 SHA-256（多线程预读）\n");
             return 2;
         }
-        // MigrationOptions：服务端要求非空，字段布局见 include/.../cfg_info.h
+
+        std::string digest = enhance;
+        if (digest.empty()) {
+            // 注意：要读【用户给的原始路径】—— bios 已被换成服务端视图，本机读不到
+            const std::string local = biosRaw.empty() ? bios : biosRaw;
+            fprintf(stderr, "正在计算 %s 的 SHA-256%s ...\n", local.c_str(),
+                    hvm::sha256HwAccelAvailable() ? "（硬件加速）" : "");
+            std::string shaErr;
+            if (hvm::sha256File(local, digest, 0, importProgress, &shaErr) != 0) {
+                digest.clear();
+                if (local != bios) {   // 退回服务端视图再试一次（个别情况下本机也能读）
+                    shaErr.clear();
+                    if (hvm::sha256File(bios, digest, 0, importProgress, &shaErr) != 0)
+                        digest.clear();
+                }
+            }
+            if (digest.empty())
+                return fail("vm import", -1,
+                            "无法读取源镜像来算摘要：" + shaErr +
+                                "\n提示：把镜像放到用户下载目录（本机可读），或用 --dst 自行提供摘要");
+            fprintf(stderr, "SHA-256 = %s\n", digest.c_str());
+        } else {
+            const std::string upper = hvm::Sha256::normalizeHexUpper(digest);
+            if (upper != digest) fprintf(stderr, "（--dst 已自动转为大写）\n");
+            digest = upper;
+            if (digest.size() != 64)
+                fprintf(stderr, "警告：--dst 长度为 %zu（应为 64），服务端可能判为镜像损坏\n",
+                        digest.size());
+        }
+
         hvm::MigrationOptionsBuilder opts;
         if (!opts.ok()) return fail("vm import", -1, "构造 MigrationOptions 失败: " + opts.lastError());
         opts.setKeepSnapshots(keepSnapshots);
         opts.setForceImport(forceImport);
         if (!password.empty()) opts.setPassword(password);
-        int rc = c.importVmDiskImage(name, bios, enhance, opts.raw());
+        const int rc = c.importVmDiskImage(name, bios, digest, opts.raw());
         if (rc != 0)
             return fail("vm import", rc,
                         std::string("ImportVmDiskImage 返回: ") + ohos_vm_error_name(rc) + " (" +
                             std::to_string(rc) + ")");
-        printf("已提交导入：%s（sha256 %s）→ 虚拟机 %s\n", bios.c_str(), enhance.c_str(), name.c_str());
+        printf("已提交导入：%s → 虚拟机 %s\n", bios.c_str(), name.c_str());
         return 0;
     }
 
@@ -1069,6 +1119,33 @@ int run(int argc, char **argv) {
                         "（请在系统自带 HiShell 终端内运行）");
     }
 
+    if (cmd == "sha256") {
+        // 计算文件 SHA-256（内置实现，多线程预读）。用法：
+        //   hvm-cli sha256 <文件> [线程数]     线程数省略时自动
+        if (a.pos.empty()) {
+            fprintf(stderr, "用法: hvm-cli sha256 <文件> [线程数]\n");
+            return 2;
+        }
+        const std::string path = a.pos[0];
+        const int threads = a.pos.size() > 1 ? std::atoi(a.pos[1].c_str()) : 0;
+        std::string hex, err;
+        const auto t0 = std::chrono::steady_clock::now();
+        const int rc = hvm::sha256File(path, hex, threads, importProgress, &err);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
+        if (rc != 0) return fail(cmd, -1, err);
+        if (g_json) {
+            Json j(cmd);
+            j.str("file", path).str("sha256", hex).num("threads", threads).num("ms", ms);
+            printf("%s\n", j.ok().c_str());
+        } else {
+            printf("%s\n", hex.c_str());
+            fprintf(stderr, "（%lld ms%s）\n", static_cast<long long>(ms),
+                    hvm::sha256HwAccelAvailable() ? "，硬件加速可用" : "");
+        }
+        return 0;
+    }
     if (cmd == "selftest") {
         std::string st = c.selfTest();
         if (g_json) {

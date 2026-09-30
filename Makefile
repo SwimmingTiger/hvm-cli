@@ -16,10 +16,17 @@ LDLIBS   ?= -ldl
 BIN_VM   := hvm-cli
 BIN_OE   := openeuler
 
-VM_SRCS  := src/hvm_client.cpp src/cfginfo.cpp src/main.cpp
-VM_HDRS  := src/hvm_client.h src/cfginfo.h
+VM_SRCS  := src/hvm_client.cpp src/cfginfo.cpp src/sha256.cpp src/main.cpp
+VM_HDRS  := src/hvm_client.h src/cfginfo.h src/sha256.h
 OE_SRCS  := src/fusion_pty.cpp src/openeuler_main.cpp
 OE_HDRS  := src/fusion_pty.h
+
+VM_OBJS  := $(VM_SRCS:.cpp=.o)
+OE_OBJS  := $(OE_SRCS:.cpp=.o)
+
+# ARMv8 加密扩展（SHA-256 硬件加速）：目标机型（鸿蒙 PC）全部支持。
+# 只给 sha256.cpp 加，避免其它代码被绑到该扩展上。
+SHA256_CFLAGS := -march=armv8-a+crypto
 
 PREFIX   ?= $(HOME)/.local
 
@@ -27,13 +34,24 @@ PREFIX   ?= $(HOME)/.local
 
 all: $(BIN_VM) $(BIN_OE)
 
-$(BIN_VM): $(VM_SRCS) $(VM_HDRS)
-	$(CXX) $(CXXFLAGS) -o $@ $(VM_SRCS) $(LDLIBS)
+$(BIN_VM): $(VM_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $(VM_OBJS) $(LDLIBS)
 	@echo "构建完成: $@"
 
-$(BIN_OE): $(OE_SRCS) $(OE_HDRS)
-	$(CXX) $(CXXFLAGS) -o $@ $(OE_SRCS) $(LDLIBS)
+$(BIN_OE): $(OE_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $(OE_OBJS) $(LDLIBS)
 	@echo "构建完成: $@"
+
+# 头文件改动要能触发重编（原先直接一行编译，改了 .h 反而不会重编）
+$(VM_OBJS): $(VM_HDRS)
+$(OE_OBJS): $(OE_HDRS)
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+# SHA-256 这一份单独启用 ARMv8 加密扩展
+src/sha256.o: src/sha256.cpp src/sha256.h
+	$(CXX) $(CXXFLAGS) $(SHA256_CFLAGS) -c -o $@ $<
 
 # 自检：分别验证两条通路的只读接口
 check: all
@@ -71,4 +89,4 @@ install: all
 	@echo "已安装到 $(PREFIX)/bin/"
 
 clean:
-	rm -f $(BIN_VM) $(BIN_OE)
+	rm -f $(BIN_VM) $(BIN_OE) $(VM_OBJS) $(OE_OBJS)
