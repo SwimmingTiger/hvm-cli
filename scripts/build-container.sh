@@ -15,4 +15,8 @@ apt-get install -y -qq --no-install-recommends \
 echo "=== 依赖就绪，开始构建 ==="
 uname -m
 chmod +x /work/build-deb12iso.sh
-/work/build-deb12iso.sh /work/deb12iso.iso /work/build
+# ★ 工作目录必须用容器【内部】的 /build，不能用挂进来的 /work：
+#   /work 是宿主机目录（nodev 挂载），debootstrap 会拒绝：
+#   "Cannot install into target mounted with noexec or nodev"
+# 产物 ISO 仍写到 /work（宿主能看到）。
+/work/build-deb12iso.sh /work/deb12iso.iso /build
