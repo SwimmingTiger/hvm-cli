@@ -982,6 +982,9 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
                         std::string("ImportVmDiskImage 返回: ") + ohos_vm_error_name(rc) + " (" +
                             std::to_string(rc) + ")");
         printf("已提交导入：%s → 虚拟机 %s\n", bios.c_str(), name.c_str());
+        // 导入即建机，同样登记进本地清单（服务端没有枚举接口，见文件头说明）
+        if (!registryAdd(name))
+            fprintf(stderr, "提示: 虚拟机已导入，但清单写入失败（%s）\n", kRegistryPath);
         return 0;
     }
 
