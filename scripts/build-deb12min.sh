@@ -6,12 +6,15 @@
 #   ./hvm-cli start  --name <新虚拟机名> --cpu 6 --mem 6
 #
 # 用法（需 root）：
-#   sudo scripts/build-deb12min.sh [输出路径] [虚拟大小]
-#   默认：/home/$USER/deb12min.qcow2  8G
+#   sudo scripts/build-deb12min.sh [输出路径] [虚拟大小] [根文件系统类型]
+#   默认：/home/$USER/deb12min.qcow2  8G  ext4
+#   例：  sudo scripts/build-deb12min.sh out.qcow2 100G btrfs
+#   根分区大小由脚本自己算：**ESP 之外的全部剩余空间**（不单独给 root 尺寸）。
 # 可用环境变量覆盖：
 #   MIRROR      apt 镜像（默认清华 http；https 在部分环境证书不全）
 #   SUITE       Debian 版本代号（默认 bookworm = Debian 12）
 #   ROOT_PASS   root 密码（默认 root —— 发布镜像请务必改掉）
+#   VM_IP / VM_GW / VM_DNS   客户机静态网络（默认 172.16.100.2/24 / 172.16.100.1 / 114.114.114.114）
 #
 # 设计要点（为什么这样做）：
 #   * 分区：p1 = 512MiB ESP(FAT32, 类型 ef00)，p2 = 其余全部 ext4 根分区。
@@ -29,16 +32,24 @@ set -euo pipefail
 
 IMG="${1:-/home/${SUDO_USER:-$USER}/deb12min.qcow2}"
 SIZE="${2:-8G}"
+ROOT_FS="${3:-ext4}"
 MIRROR="${MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}"
 SUITE="${SUITE:-bookworm}"
 ROOT_PASS="${ROOT_PASS:-root}"
 NBD="${NBD:-/dev/nbd0}"
-ROOT="/mnt/deb12min"
+ROOT="${ROOT:-/mnt/deb12min}"    # 可覆盖：并跑多个构建时各自用不同挂载点
 LOG() { printf '\n=== %s ===\n' "$*"; }
 
 [ "$(uname -m)" = "aarch64" ] || { echo "此脚本面向 arm64（鸿蒙 PC 虚拟机是 aarch64），当前: $(uname -m)"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "请用 root 运行（sudo $0）"; exit 1; }
-for c in qemu-img qemu-nbd debootstrap sgdisk mkfs.vfat mkfs.ext4 partprobe blkid fstrim; do
+case "$ROOT_FS" in
+    ext4)  MKFS_OPTS=(-q -F -L root); FSTAB_OPTS="errors=remount-ro"; FSTAB_PASS=1; FS_PKGS="" ;;
+    xfs)   MKFS_OPTS=(-f -L root);    FSTAB_OPTS="defaults";         FSTAB_PASS=0; FS_PKGS="xfsprogs" ;;
+    btrfs) MKFS_OPTS=(-f -L root);    FSTAB_OPTS="defaults";         FSTAB_PASS=0; FS_PKGS="btrfs-progs" ;;
+    *) echo "不支持的根文件系统: $ROOT_FS（可选 ext4 / xfs / btrfs）"; exit 1 ;;
+esac
+
+for c in qemu-img qemu-nbd debootstrap sgdisk mkfs.vfat "mkfs.$ROOT_FS" partprobe blkid fstrim; do
     command -v "$c" >/dev/null || { echo "缺少命令: $c（Debian/Ubuntu: apt-get install qemu-utils debootstrap gdisk dosfstools parted util-linux）"; exit 1; }
 done
 
@@ -55,9 +66,9 @@ wait_part() {
 
 cleanup() {
     set +e
-    umount "$ROOT/boot/efi" 2>/dev/null
-    umount "$ROOT/dev/pts" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" 2>/dev/null
-    umount "$ROOT" 2>/dev/null
+    # 用 umount -R 递归卸载；成功不了再用 -l（惰性）兜底。
+    # 顺序 umount 在 dev/pts 上会 busy，别用。
+    umount -R "$ROOT" 2>/dev/null || umount -R -l "$ROOT" 2>/dev/null
     qemu-nbd -d "$NBD" >/dev/null 2>&1
 }
 trap cleanup EXIT
@@ -74,11 +85,14 @@ wait_part "${NBD}"
 LOG "1/8 分区 + 文件系统"
 sgdisk --zap-all "$NBD" >/dev/null
 sgdisk -n 1:2048:+512M -t 1:ef00 -c 1:ESP  "$NBD" >/dev/null
+# p2 从剩余空间开头一直到最后：根分区自动用满 ESP 之外的**全部**空间
 sgdisk -n 2:0:0       -t 2:8300 -c 2:root "$NBD" >/dev/null
 wait_part "${NBD}p1"
 wait_part "${NBD}p2"
 mkfs.vfat -F 32 -n ESP  "${NBD}p1" >/dev/null
-mkfs.ext4 -q -F -L root "${NBD}p2"
+mkfs."$ROOT_FS" "${MKFS_OPTS[@]}" "${NBD}p2"
+ROOT_BYTES=$(blockdev --getsize64 "${NBD}p2")
+echo "根分区（$ROOT_FS）大小: $((ROOT_BYTES / 1024 / 1024)) MiB（= 整盘减去 512MiB ESP）"
 
 LOG "2/8 挂载并 debootstrap（$SUITE, minbase）"
 mkdir -p "$ROOT"
@@ -90,22 +104,38 @@ debootstrap --arch=arm64 --variant=minbase \
 
 LOG "3/8 进入 chroot 安装内核 / GRUB / sshd"
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
-mount --bind /dev  "$ROOT/dev"
-mount --bind /dev/pts "$ROOT/dev/pts"
+# 绑定宿主的 /dev /proc /sys 时，必须先断开与宿主的**共享传播**：
+#   * /dev 是 bind，用 --make-rslave（官方推荐做法，chroot 工具链都这么写）；
+#   * /proc /sys 是新挂载，用 --make-private 即可。
+# 不做这一步的后果实测过：收尾时 umount 会卡在
+#   "umount: <root>/dev/pts: target is busy"
+# 而且在某些内核上 chroot 里的挂载还会反向传染到宿主。
+for d in dev dev/pts; do
+    mkdir -p "$ROOT/$d"
+    mount --bind "/$d" "$ROOT/$d"
+    mount --make-rslave "$ROOT/$d"
+done
+mkdir -p "$ROOT/proc" "$ROOT/sys"
 mount -t proc proc "$ROOT/proc"
+mount --make-private "$ROOT/proc"
 mount -t sysfs sys "$ROOT/sys"
+mount --make-private "$ROOT/sys"
 cat > "$ROOT/etc/apt/sources.list" <<EOF
 deb $MIRROR $SUITE main
 deb $MIRROR $SUITE-updates main
 deb http://security.debian.org/debian-security $SUITE-security main
 EOF
-chroot "$ROOT" /bin/bash -eux <<'CHROOT'
+chroot "$ROOT" /bin/bash -eux <<CHROOT
 export DEBIAN_FRONTEND=noninteractive
+export FS_PKGS="$FS_PKGS"
 apt-get update -qq
 # 只装必要组件：内核、EFI 引导、sshd，外加 ca-certificates/iproute2/guest-agent
 apt-get install -y --no-install-recommends \
     linux-image-arm64 grub-efi-arm64 openssh-server \
-    ca-certificates iproute2 qemu-guest-agent systemd-resolved
+    ca-certificates iproute2 qemu-guest-agent systemd-resolved \
+    systemd-sysv ${FS_PKGS}
+# 说明：systemd-sysv 提供 /sbin/init → systemd；debootstrap 的 minbase 只装了
+# systemd 本体，**没有** 这个符号链接，缺了它内核起来后会掉进 initramfs 的急救 shell。
 CHROOT
 
 LOG "4/8 系统配置（主机名 / fstab / 网络 / 串口）"
@@ -118,27 +148,47 @@ cat > "$ROOT/etc/hosts" <<'EOF'
 ::1		localhost ip6-localhost ip6-loopback
 EOF
 cat > "$ROOT/etc/fstab" <<EOF
-UUID=$ROOT_UUID	/	ext4	errors=remount-ro	0	1
+UUID=$ROOT_UUID	/	$ROOT_FS	$FSTAB_OPTS	0	$FSTAB_PASS
 UUID=$ESP_UUID	/boot/efi	vfat	umask=0077		0	1
 EOF
-cat > "$ROOT/etc/systemd/network/20-wired.network" <<'EOF'
+# 网络：静态 IP（框架的虚拟网络是 172.16.100.0/24，网关 .1）。
+# 可用 VM_IP / VM_GW / VM_DNS 覆盖；不设 DHCP —— 实测框架侧不保证有 DHCP。
+cat > "$ROOT/etc/systemd/network/20-wired.network" <<EOF
 [Match]
 Name=en* eth*
 
 [Network]
-DHCP=yes
+Address=${VM_IP:-172.16.100.2/24}
+Gateway=${VM_GW:-172.16.100.1}
+DNS=${VM_DNS:-114.114.114.114}
 EOF
 ln -sf /run/systemd/resolve/stub-resolv.conf "$ROOT/etc/resolv.conf"
+# 关键：initramfs 要包含根文件系统的驱动。内核包安装时 fstab 还没写、当前根还是 nbd 上的
+# 临时系统，initramfs-tools 判断不出真正的根类型 —— 所以配好 fstab 后必须重建一次，
+# 否则 xfs/btrfs 会卡在 "run-init: /sbin/init: No such file or directory" 这类错误里。
+chroot "$ROOT" update-initramfs -u -k all
 chroot "$ROOT" /bin/bash -eux <<'CHROOT'
 systemctl enable systemd-networkd systemd-resolved ssh qemu-guest-agent
 systemctl enable serial-getty@ttyAMA0
-# 首启为每台实例生成自己的 SSH 主机密钥（镜像里不预置任何密钥）
+# 首启为每台实例生成自己的 SSH 主机密钥（镜像里**不预置**任何密钥）。
+# 坑：Debian 的 ssh.service 自己带 `ExecStartPre=/usr/sbin/sshd -t`，而主单元里的
+# ExecStartPre 排在 drop-in 之前 —— 没有主机密钥时 `sshd -t` 会直接失败，
+# 于是 ssh.service 起不来（实测：引导日志里 "[FAILED] Failed to start ssh.service"）。
+# 所以这里先用空赋值**清空**继承来的 ExecStartPre 列表，再按正确顺序重写：
+# 先生成密钥，再做配置自检。
+# 另一个坑（实测踩到）：Debian 的 ssh-keygen 在 **/usr/bin/** 而不是 /usr/sbin，
+# 写成 /usr/sbin/ssh-keygen 会让这条 ExecStartPre 直接执行不起来 → 密钥永远不生成 →
+# sshd -t 必然失败。这里用 /bin/sh -c 'ssh-keygen -A' 走 PATH，不依赖具体路径。
 rm -f /etc/ssh/ssh_host_*
 mkdir -p /etc/systemd/system/ssh.service.d
 cat > /etc/systemd/system/ssh.service.d/10-host-keys.conf <<'EOF'
 [Service]
-ExecStartPre=/usr/sbin/ssh-keygen -A
+ExecStartPre=
+ExecStartPre=/bin/sh -c 'ssh-keygen -A'
+ExecStartPre=/usr/sbin/sshd -t
 EOF
+# 空赋值会重置列表，这里断言一下顺序确实写对了（生成密钥在自检之前）
+awk '/^ExecStartPre=/ {print NR": "$0}' /etc/systemd/system/ssh.service.d/10-host-keys.conf
 # 发布卫生：清空机器标识（首启重新生成）
 : > /etc/machine-id
 rm -f /var/lib/dbus/machine-id
@@ -183,7 +233,7 @@ LOG "8/8 释放空洞并卸载"
 # 配合连接时的 --discard=unmap，qcow2 会真正缩小 —— 这是**减小**体积的一步。
 fstrim -v "$ROOT" || true
 sync
-umount "$ROOT/boot/efi" "$ROOT/dev/pts" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" "$ROOT"
+umount -R "$ROOT" 2>/dev/null || umount -R -l "$ROOT"
 qemu-nbd -d "$NBD" >/dev/null
 trap - EXIT
 
