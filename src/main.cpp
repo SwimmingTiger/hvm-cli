@@ -1353,7 +1353,14 @@ int run(int argc, char **argv) {
         const std::size_t show = kept.size() > 20 ? kept.size() - 20 : 0;
         for (std::size_t i = show; i < kept.size(); ++i) printf("%s\n", kept[i].c_str());
         fflush(stdout);
+        // ★ 上面的 getline 是【读到 EOF】才退出的，此时流已置 failbit，
+        //   直接 tellg() 会返回 -1（实测确认），于是下面每轮 seekg(-1) 都失败、
+        //   被 `if (!more) continue` 吞掉 —— 表现就是"进程在跑但永远不更新"。
+        //   必须先 clear() 再用 seekg(end) 取真正的位置。
+        in.clear();
+        in.seekg(0, std::ios::end);
         std::streampos pos = in.tellg();
+        if (pos < 0) pos = 0;
         for (;;) {                            // 轮询新增内容
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             std::ifstream more(kVmLogPath);
