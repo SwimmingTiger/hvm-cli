@@ -303,9 +303,29 @@ cp "$ROOTFS"/boot/initrd.img-* "$ISOTREE/live/initrd.img"
 # -e 排除的是这些目录的【内容】而不是目录本身（写成 -e proc 会把目录也排掉，
 # 于是 live 系统把 squashfs 当根挂上后 /dev /proc /sys /run 不存在 → init 无法 bind-mount
 # → 连 /dev/console 都打不开 → init 退出 → Kernel panic。实测踩到过）。
+# ★ 打包前必须先把 chroot 用的 bind 挂载卸掉，并清空这些运行时目录的【内容】，
+#   但**保留目录本身**。两个都踩过坑（见 docs/iso-install-notes.md §5 第 6 条）：
+#     -e proc        → 连目录一起排掉 → live 系统挂根后没有 /dev /proc → init panic
+#     -e 'proc/*'    → 根本没匹配上 → 把活着的 /proc、/dev 一起打进 squashfs
+#                      （读 3000 多个进程文件全报错，产出一个几乎空的废 ISO，实测踩到）
+for d in dev proc sys run tmp mnt; do
+    umount -R "$ROOTFS/$d" 2>/dev/null || umount -l "$ROOTFS/$d" 2>/dev/null || true
+    find "$ROOTFS/$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    mkdir -p "$ROOTFS/$d"
+done
+[ -d "$ROOTFS/tmp" ] && chmod 1777 "$ROOTFS/tmp" 2>/dev/null || true
+LOG "已卸挂载并清空运行时目录（保留空目录）"
 mksquashfs "$ROOTFS" "$ISOTREE/live/filesystem.squashfs" \
-    -comp "$SQ_COMP" -noappend \
-    -e 'proc/*' -e 'sys/*' -e 'dev/*' -e 'run/*' -e 'tmp/*' -e 'mnt/*' >/dev/null
+    -comp "$SQ_COMP" -noappend >/dev/null
+
+# ★ 尺寸自检：上面那个坑的表现就是"构建成功但 squashfs 几乎是空的"，
+#   所以这里必须拦住（EFI 引导镜像 16M + 内核 33M + initrd 39M ≈ 88M 是地板）。
+SQ_SZ=$(stat -c %s "$ISOTREE/live/filesystem.squashfs" 2>/dev/null || echo 0)
+LOG "squashfs 大小：$((SQ_SZ/1024/1024)) MiB"
+if [ "$SQ_SZ" -lt $((50*1024*1024)) ]; then
+    LOG "错误：squashfs 只有 $((SQ_SZ/1024/1024)) MiB —— 说明根文件系统没打进去（见上面的注释），中止"
+    exit 1
+fi
 
 # ---------------------------------------------------------------- 5) UEFI 引导
 LOG "5/6 生成 EFI 引导镜像"
