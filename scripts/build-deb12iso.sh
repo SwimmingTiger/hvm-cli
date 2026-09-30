@@ -288,7 +288,7 @@ chroot /target update-grub || chroot /target grub-mkconfig -o /boot/grub/grub.cf
 # ★ --removable 装出的 BOOTAA64.EFI 的 prefix 是 ESP 上的 /EFI/BOOT，
 #   它只会在那里找 grub.cfg；而上面那份写在根分区的 /boot/grub/grub.cfg 它看不到，
 #   结果就是装完重启后 GRUB 找不到配置。所以在 ESP 上再放一份 —— 这份 cfg 里带
-#   `search --fs-uuid --set=root <根分区UUID>`，会把 root 自动定位回根分区，因此可用。
+#   'search --fs-uuid --set=root <根分区UUID>'，会把 root 自动定位回根分区，因此可用。
 mkdir -p /target/boot/efi/EFI/BOOT
 chroot /target grub-mkconfig -o /boot/efi/EFI/BOOT/grub.cfg 2>/dev/null || \
     cp /target/boot/grub/grub.cfg /target/boot/efi/EFI/BOOT/grub.cfg || \
