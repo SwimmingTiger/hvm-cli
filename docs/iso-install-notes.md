@@ -69,7 +69,7 @@
 # 在 openEuler 里（设备侧用 ./openeuler exec 进去）
 sudo podman run --rm --replace --name hvm-iso-build --privileged --network host \
     -e SQ_COMP=gzip \
-    -v /home/hu60/iso-work:/work debian:12 /work/build-container.sh
+    -v "$HOME/iso-work":/work debian:12 /work/build-container.sh
 ```
 
 * 需要 `--privileged`：脚本要在 chroot 里 bind `/dev`、`/proc`、`/sys` 跑 `debootstrap`/`apt`；
@@ -180,7 +180,7 @@ if (!QcowDisk) {
 sudo podman run … debian:12 /work/build-container.sh
 
 # 取回设备（virtiofs 共享目录，一步到位）
-./openeuler exec 'cp /home/hu60/iso-work/debian-12-unattended-arm64.iso \
+./openeuler exec 'cp $HOME/iso-work/debian-12-unattended-arm64.iso \
     /mnt/linux_share/storage/Users/currentUser/Download/'
 
 # 审计：efi.img 内容 + PE 头 + squashfs 关键文件 + initrd 的 live-boot 机制

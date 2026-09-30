@@ -3,7 +3,7 @@
 #
 # 用法（在 openEuler 上）：
 #   sudo podman run --rm --network host \
-#       -v /home/hu60/iso-work:/work \
+#       -v "$HOME/iso-work":/work \
 #       -v /mnt/linux_share/storage/Users/currentUser/Download:/iso:ro \
 #       debian:12 bash /work/audit-iso.sh [ISO 文件名]
 #

@@ -17,7 +17,7 @@
 #
 # 用法（需要 root；**不需要**任何挂载/nbd 权限，容器里也能跑）：
 #   sudo scripts/build-deb12iso.sh [输出iso] [工作目录]
-#   默认：/home/$USER/debian-12-unattended-arm64.iso   /home/$USER/deb12iso-build
+#   默认：$HOME/debian-12-unattended-arm64.iso   $HOME/deb12iso-build
 #
 # 可用环境变量：
 #   MIRROR     apt 镜像（默认清华 http；https 在部分环境证书不全）
@@ -32,8 +32,12 @@
 
 set -euo pipefail
 
-ISO="${1:-/home/${SUDO_USER:-$USER}/debian-12-unattended-arm64.iso}"
-WORK="${2:-/home/${SUDO_USER:-$USER}/deb12iso-build}"
+# 家目录一律用 $HOME：$USER 是"用户名"，不是家目录本身 —— 家目录不一定位于
+# /home/<用户名>（也可能根本没设 $USER）。sudo 下 HOME 通常被保留；真为空时用 shell 的
+# ~ 展开兜底（bash 内建，不依赖 getent —— HarmonyOS 上就没有 getent，实测踩到）。
+[ -n "${HOME:-}" ] || HOME=$(eval echo ~)
+ISO="${1:-$HOME/debian-12-unattended-arm64.iso}"
+WORK="${2:-$HOME/deb12iso-build}"
 MIRROR="${MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}"
 SUITE="${SUITE:-bookworm}"
 ROOT_PASS="${ROOT_PASS:-root}"

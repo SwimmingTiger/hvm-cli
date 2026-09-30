@@ -7,7 +7,7 @@
 #
 # 用法（需 root）：
 #   sudo scripts/build-deb12min.sh [输出路径] [虚拟大小] [根文件系统类型]
-#   默认：/home/$USER/deb12min.qcow2  8G  ext4
+#   默认：$HOME/deb12min.qcow2  8G  ext4
 #   例：  sudo scripts/build-deb12min.sh out.qcow2 100G btrfs
 #   根分区大小由脚本自己算：**ESP 之外的全部剩余空间**（不单独给 root 尺寸）。
 # 可用环境变量覆盖：
@@ -30,7 +30,11 @@
 #     这样得到的才是尽量小的镜像。
 set -euo pipefail
 
-IMG="${1:-/home/${SUDO_USER:-$USER}/deb12min.qcow2}"
+# 家目录一律用 $HOME：$USER 是"用户名"，不是家目录本身 —— 家目录不一定位于
+# /home/<用户名>（也可能根本没设 $USER）。sudo 下 HOME 通常被保留；真为空时用 shell 的
+# ~ 展开兜底（bash 内建，不依赖 getent —— HarmonyOS 上就没有 getent，实测踩到）。
+[ -n "${HOME:-}" ] || HOME=$(eval echo ~)
+IMG="${1:-$HOME/deb12min.qcow2}"
 SIZE="${2:-8G}"
 ROOT_FS="${3:-ext4}"
 MIRROR="${MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}"
