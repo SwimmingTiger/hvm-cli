@@ -853,7 +853,7 @@ constexpr const char *kProbeVmNames[] = {hvm::kLinuxVm};
 //: CfgInfo 是华为私有类型（无公开头文件），这里按逆向配方手工构造。
 int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (pos.empty()) {
-        fprintf(stderr, "用法: hvm-cli vm ctor|create|start|destroy [选项]\n");
+        fprintf(stderr, "用法: hvm-cli ctor|create|start|destroy [选项]\n");
         return 2;
     }
     const std::string act = pos[0];
@@ -1059,7 +1059,7 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         //   --dst = 目标【文件名】（纯文件名，服务端自己拼 目录/文件名）
         if (name.empty() || bios.empty() || enhance.empty()) {
             fprintf(stderr,
-                    "用法: hvm-cli vm export --name <vm> --src <目标目录> --dst <目标文件名>\n"
+                    "用法: hvm-cli export --name <vm> --src <目标目录> --dst <目标文件名>\n"
                     "      （--src 与 --bios 同义，--dst 与 --enhance 同义；\n"
                     "        目录必须存在，文件名服务端会拼成 目录/文件名）\n");
             return 2;
@@ -1378,13 +1378,18 @@ int run(int argc, char **argv) {
             } else {
                 printf("清单为空（%s）\n", kRegistryPath);
                 printf("新建或导入虚拟机后会自动记录。例如：\n");
-                printf("  # 从 ISO 全新安装\n");
-                printf("  ./hvm-cli vm create --name myvm --image <ISO> --enhance <ISO> "
-                       "--bios /system/opt/virt_service/virtualized_hwf/stratovirt-uefi "
-                       "--cpu 6 --mem 6 --disk-gb 64\n");
+                printf("  # 从 ISO 全新安装。--net nat 必须给，否则建出来的虚拟机没有网卡；\n");
+                printf("  #   --enhance 也不能与 --image 指向同一个文件。\n");
+                printf("  ./hvm-cli create --name myvm \\\n");
+                printf("      --image   /storage/Users/currentUser/Download/debian-12-unattended-arm64.iso \\\n");
+                printf("      --enhance /storage/Users/currentUser/Download/oetool.iso \\\n");
+                printf("      --bios    /system/opt/virt_service/virtualized_hwf/stratovirt-uefi \\\n");
+                printf("      --cpu 6 --mem 8 --disk-gb 128 --net nat\n");
                 printf("  # 导入现成的 qcow2（镜像放下载目录即可；名字需尚不存在）\n");
-                printf("  ./hvm-cli vm import --name myvm --src <镜像文件>\n");
-                printf("  ./hvm-cli vm start  --name myvm --cpu 6 --mem 6\n");
+                printf("  #   ！！导入出来的虚拟机【没有网络】：框架的网络配置是宿主侧按 CfgInfo 分配的，\n");
+                printf("  #   而 import 这条路径不带 CfgInfo，所以 net ip 与网络模式切换一律返回 405。\n");
+                printf("  ./hvm-cli import --name myvm --src /storage/Users/currentUser/Download/debian12.qcow2\n");
+                printf("  ./hvm-cli start  --name myvm --cpu 6 --mem 6\n");
             }
             return 0;
         }
