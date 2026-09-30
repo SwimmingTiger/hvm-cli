@@ -312,6 +312,13 @@ int sha256File(const std::string &path, std::string &hexUpper, int threads,
     std::condition_variable cvFree, cvDone;
     std::atomic<uint64_t> nextIdx{0};
     std::atomic<bool> failed{false};
+    // 关键不变量：读者只能认领「消费进度 + depth」之内的块号。
+    // 只限制"在飞块数"是不够的 —— 那样读者仍可能认领到很后面的块号（例如第 i+depth 块
+    // 与第 i 块共用同一个槽），把还没消费的块覆盖掉，于是消费者把第 i+depth 块当成第 i 块
+    // 吃进去，算出**看似正常但错误**的摘要（实测：1.5GB 镜像上算错、633MB 上侥幸算对）。
+    // 限制块号跨度后，槽位 i%depth 的上一轮 occupant 必然是第 i-depth 块，
+    // 而它一定已被消费，槽位里就只可能是第 i 块。
+    uint64_t consumeIdx = 0;   // 消费者接下来要吃第几块（受 m 保护）
 
     auto reader = [&] {
         for (;;) {
@@ -320,8 +327,8 @@ int sha256File(const std::string &path, std::string &hexUpper, int threads,
             Slot &s = slots[static_cast<std::size_t>(i % static_cast<uint64_t>(depth))];
             {
                 std::unique_lock<std::mutex> lk(m);
-                // 失败时也要唤醒，否则读者会一直等不到槽位释放
-                cvFree.wait(lk, [&] { return s.state == FREE || failed.load(); });
+                // 失败时也要唤醒，否则读者会一直等不到窗口前进
+                cvFree.wait(lk, [&] { return i < consumeIdx + static_cast<uint64_t>(depth) || failed.load(); });
                 if (failed.load()) return;
                 s.state = READING;
                 s.idx = i;
@@ -357,13 +364,29 @@ int sha256File(const std::string &path, std::string &hexUpper, int threads,
     Sha256 sha;
     uint64_t done = 0;
     bool ok = true;
+    const char *errKind = "读取失败";
+    std::string errDetail;
     for (uint64_t i = 0; i < nchunks; ++i) {
         Slot &s = slots[static_cast<std::size_t>(i % static_cast<uint64_t>(depth))];
         {
             std::unique_lock<std::mutex> lk(m);
+            consumeIdx = i;          // 窗口右移：允许读者认领到第 i+depth-1 块
+            cvFree.notify_all();
             cvDone.wait(lk, [&] { return s.state == DONE || failed.load(); });
+            // 块号兜底校验：一旦不匹配说明槽位复用出了问题，宁可失败也不给错摘要
             if (s.state != DONE) {
                 ok = false;
+                errKind = "读取失败";
+                errDetail = "第 " + std::to_string(i) + " 块读取未完成";
+                break;
+            }
+            if (s.idx != i) {
+                ok = false;
+                errKind = "内部错误";
+                errDetail = "块序错乱：期望第 " + std::to_string(i) + " 块，槽位里是第 " +
+                             std::to_string(s.idx) + " 块（共 " + std::to_string(nchunks) +
+                             " 块，块长 " + std::to_string(chunk) + "，槽位 " +
+                             std::to_string(depth) + "，线程 " + std::to_string(threads) + "）";
                 break;
             }
         }
@@ -386,7 +409,8 @@ int sha256File(const std::string &path, std::string &hexUpper, int threads,
     for (auto &t : pool) t.join();
     ::close(fd);
 
-    if (!ok || failed.load()) return fail("读取失败：" + path);
+    if (!ok || failed.load())
+        return fail(std::string(errKind) + "：" + path + (errDetail.empty() ? "" : "（" + errDetail + "）"));
     uint8_t d[32];
     sha.final(d);
     hexUpper = Sha256::toHexUpper(d);
