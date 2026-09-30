@@ -181,14 +181,14 @@ set -euo pipefail
 DISK="$TARGET_DISK"
 # 分区设备名：只有结尾是数字的设备才需要 p 后缀（nvme0n1p1 / loop0p1），
 # 而 /dev/vda 的正确名字是 /dev/vda1 —— 这里此前照搬 loop 的写法错了，实测踩到。
-case "$DISK" in
-    *[0-9]) P="${DISK}p" ;;
-    *)       P="${DISK}"  ;;
+case "\$DISK" in
+    *[0-9]) P="\${DISK}p" ;;
+    *)       P="\$DISK"  ;;
 esac
 LOG() { echo "[\$(date +%H:%M:%S)] \$*" | tee -a /dev/console; }
 
 LOG "安装开始：目标盘 \$DISK"
-if [ ! -b "\$DISK" ]; then LOG "找不到目标盘 \$DISK，转交互 shell"; exec /bin/bash; fi
+if [ ! -b "\$DISK" ]; then LOG "找不到目标盘 \$DISK —— 无法继续，停在这里等待排查（不动磁盘）"; sleep 3600; fi
 
 # squashfs 就在 ISO 上；unsquashfs 直接读文件 —— 不用 loop、不用 mount
 SQ=""
@@ -197,7 +197,7 @@ for c in /run/live/medium/live/filesystem.squashfs \
          /cdrom/live/filesystem.squashfs; do
     if [ -f "\$c" ]; then SQ="\$c"; break; fi
 done
-if [ -z "\$SQ" ]; then LOG "找不到 squashfs，转交互 shell"; exec /bin/bash; fi
+if [ -z "\$SQ" ]; then LOG "找不到 squashfs —— 无法继续，停在这里等待排查（不动磁盘）"; sleep 3600; fi
 LOG "squashfs 来源：\$SQ"
 
 # 分区：512MiB ESP + 其余全部给根（与 build-deb12min.sh 一致）
