@@ -186,6 +186,19 @@ PermitRootLogin yes
 PasswordAuthentication yes
 SSHD
 
+# 屏蔽 vmwgfx：框架的显示不走 VMware SVGA，加载它只会报
+#   vmwgfx 0000:00:04.0: [drm] *ERROR* Unsupported SVGA ID 0xffffffff on chipset 0x405
+# 与 build-deb12min.sh 保持一致（那里也是命令行 + modprobe.d 双保险）。
+mkdir -p "$ROOTFS/etc/modprobe.d"
+cat > "$ROOTFS/etc/modprobe.d/blacklist-vmwgfx.conf" <<'MWG'
+blacklist vmwgfx
+MWG
+# 装机后的系统从 grub-mkconfig 取参数，所以要同时写进 GRUB 的默认命令行走；
+# 用 grub.d 的 drop-in 追加，避免覆盖发行版原有参数。
+mkdir -p "$ROOTFS/etc/default/grub.d"
+printf 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT modprobe.blacklist=vmwgfx"\n' \
+    > "$ROOTFS/etc/default/grub.d/90-hvm-blacklist.cfg"
+
 # ---------------------------------------------------------------- 3) 自动安装器
 # 只在「live 引导 + 命令行带 install=1」时动磁盘，避免误伤。
 # 注意本 heredoc 用 <<INSTALLER（不加引号）：$TARGET_DISK 在**构建期**展开，
@@ -353,11 +366,11 @@ set default=0
 #   按 ISO 卷标（下面 xorriso 的 -V HVMDEB12）把 root 指到光盘上。
 search --no-floppy --label HVMDEB12 --set=root
 menuentry "安装 Debian 12 到磁盘（自动，squashfs）" {
-    linux  /live/vmlinuz boot=live components console=ttyAMA0,115200 install=1 quiet
+    linux  /live/vmlinuz boot=live components console=ttyAMA0,115200 modprobe.blacklist=vmwgfx install=1 quiet
     initrd /live/initrd.img
 }
 menuentry "Live 系统（不安装，进串口 shell）" {
-    linux  /live/vmlinuz boot=live components console=ttyAMA0,115200 quiet
+    linux  /live/vmlinuz boot=live components console=ttyAMA0,115200 modprobe.blacklist=vmwgfx quiet
     initrd /live/initrd.img
 }
 EOF
