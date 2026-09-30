@@ -424,6 +424,36 @@ make check-repo   # 确认仓库里没有二进制文件
 make install      # 可选，装到 ~/.local/bin
 ```
 
+## 生成最小 Debian 12 镜像（可导入、可发布）
+
+`scripts/build-deb12min.sh` 在一台 **arm64 Linux** 上从零做一个最小 Debian 12 磁盘
+（qcow2）：只含基础系统 + 内核 + GRUB + sshd，可直接导入本工具当虚拟机用。
+
+```bash
+# 在一台 arm64 Debian/Ubuntu 上（需要 qemu-utils debootstrap gdisk dosfstools parted）
+sudo apt-get install -y qemu-utils debootstrap gdisk dosfstools parted
+sudo scripts/build-deb12min.sh /tmp/deb12min.qcow2 8G     # [输出路径] [虚拟大小，默认 8G]
+
+# 把 qcow2 放到设备上，然后导入并启动（名字必须尚不存在）
+./hvm-cli import --name deb12min --src /storage/Users/currentUser/Download/deb12min.qcow2
+./hvm-cli start  --name deb12min --cpu 6 --mem 6
+./hvm-cli vmlog -f          # 看串口：出现 "Debian GNU/Linux 12 … ttyAMA0" 即成功
+```
+
+镜像内容与设计（细节见脚本头部注释）：
+
+- **分区**：512 MiB ESP（FAT32）+ ext4 根分区，并放好 `EFI/BOOT/BOOTAA64.EFI`（stratovirt 走 UEFI 引导）；
+- **内核参数**：`console=ttyAMA0,115200`（串口，`vmlog` 读的就是它）
+  加 `modprobe.blacklist=vmwgfx`（屏蔽该模块，与 `modprobe.d` 里的 blacklist 双保险）；
+- **网络**：`systemd-networkd` + `en*`/`eth*` 通配 DHCP，换环境不用改配置；
+- **登录**：默认 `root` / `root`（可用环境变量 `ROOT_PASS` 覆盖 —— **发布前请务必改掉**）；
+- **发布卫生**：清空 `/etc/machine-id`、删除预生成的 SSH 主机密钥，并加一个
+  `ssh-keygen -A` 的 drop-in，让每台实例首启生成自己的密钥；
+- **体积**：只装 `--no-install-recommends`，装完清 apt 缓存与 lists，最后用 `fstrim`
+  配合 `qemu-nbd --discard=unmap` 把已删文件的块真正还给 qcow2。
+
+虚拟大小默认 8 GiB；之后需要更大空间可用 `./hvm-cli --vm <名字> disk expand <GB>` 扩容。
+
 ## 调试
 
 系统自带的 lldb-server 在应用沙箱里 `ptrace` 会被拒。可改用**应用商店里的 CodeArts IDE**（`com.huawei.codearts`，
@@ -476,6 +506,7 @@ $ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
 | `docs/abi/vm_manager_client_wrapper.symbols.txt` | 设备导出符号快照（121 个方法与 mangled 名，生成器的核对基准） |
 | `scripts/gen-wrapper-api.py` | 生成 `vm_manager_kits.h` 与 `.syms.h`；借 ABI shim 让**编译器**产出 mangled 名并与设备核对 |
 | `scripts/abi-shim/__config_site` | 强制 `_LIBCPP_ABI_NAMESPACE __h`，使本机 clang 产出的符号名与设备库一致 |
+| `scripts/build-deb12min.sh` | 从零构建最小 Debian 12 arm64 qcow2（可导入、可发布） |
 | `scripts/hwdbg.sh` | 沙箱内可用的 lldb 调试封装（CodeArts IDE 提供的 lldb-server） |
 | `scripts/check-no-binary.sh` | 提交前检查：仓库内不得有二进制文件 |
 
