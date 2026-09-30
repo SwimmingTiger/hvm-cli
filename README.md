@@ -155,21 +155,26 @@ $ ./hvm-cli start --name myvm --cpu 6 --mem 6
 - 其余参数可以省略：省略的字段服务端用创建时存档的值（实测：省略 `--cpu` 时
   仍按存档的 6 核启动，省略 `--bios` 时仍用存档的固件路径）。
 
-虚拟机启动后可通过如下方式查看虚拟机串口输出：
+虚拟机启动后，用 `vmlog` 看**客户机串口输出**（GRUB 菜单、内核日志、systemd 启动过程、
+登录横幅等）：
 
 ```console
-$ tail -f /data/log/hwf_service/vmlog
+$ ./hvm-cli vmlog            # 打印已有的串口输出
+$ ./hvm-cli vmlog -f         # 持续跟随（先补上最后 20 行，再跟着刷）
 ```
 
-如果需要去除样式只看文本，用 `strings`：
+`vmlog` 只打印**客户机串口**：stratoVirt 自己的日志行与其它模块的日志都会被过滤掉，
+ANSI 控制序列也会去掉 —— 所以不用再 `strings` 一遍。
+
+反过来，如果你想看的是**虚拟机引擎本身**的日志（stratoVirt / hwf_service 自己的记录，
+例如引擎报错、光盘打开失败、设备初始化之类），那就直接读原始文件：
 
 ```console
 $ strings /data/log/hwf_service/vmlog
 ```
 
-（该文件是 `-serial redirect-to-log` 的落点，GRUB 菜单与客户机控制台文本都在里面，
-只是被包在 stratoVirt 自己的日志行里、并夹着 ANSI 控制序列 —— 所以 `strings`
-通常更好读。）
+> 两者是同一个文件的两个侧面：这个文件是 `-serial redirect-to-log` 的落点，
+> 客户机的控制台文本就夹在引擎自己的日志行之间。
 
 > 注意：`create` 本身就会启动一次（安装阶段），所以刚创建完的虚拟机已经在跑；
 > 这里的 `start` 用于**之后**的启动。挂盘规则见下一节。
@@ -260,7 +265,7 @@ $ ./hvm-cli --vm myvm net ip              # 客户机 IPv4（需客户机已联�
 ```
 
 安装过程中的客户机文本输出（GRUB 菜单、控制台日志）见
-[「3. 启动」](#3-启动开机)一节的 `tail -f` / `strings` 用法。
+[「3. 启动」](#3-启动开机)一节的 `vmlog` / `vmlog -f` 用法。
 
 ### 参数规则（逆向自服务端校验，实测确认）
 
@@ -376,7 +381,7 @@ $ ./hvm-cli vmlog
 | 看到自己虚拟机的**画面**、给它**发按键** | ❌ 画面要合成进"应用窗口"，而窗口只有 UIAbility 能创建 |
 | 自己写 HAP 绕过上面两条 | ❌ appIdentifier 不在白名单 |
 | 让系统四指右滑进自己虚拟机的全屏 | ❌ 同上（系统合成的对象是应用窗口） |
-| 读客户机的**文本**控制台（GRUB、安装器输出） | ✅ 可以（`-serial redirect-to-log` → `/data/log/hwf_service/vmlog`，我们可读） |
+| 读客户机的**文本**控制台（GRUB、安装器输出） | ✅ 可以（`-serial redirect-to-log` → `/data/log/hwf_service/vmlog`；用 `./hvm-cli vmlog` 读；引擎自身日志用 `strings` 读同一文件） |
 | 多台虚拟机并存 / 同时只运行一台 | ✅ / ⛔ 服务端限制 |
 
 > 因此"交互式装系统 + 看画面"只能用**厂商合作应用的界面**（OSEasy / Sanway）；
