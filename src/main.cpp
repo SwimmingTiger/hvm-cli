@@ -8,6 +8,10 @@
 #include <unistd.h>   // getuid：用 uid/200000 推导 OS 账号 id
 #include <algorithm>   // sort/unique/remove/find（本地虚拟机清单）
 #include <fstream>     // 清单文件读写
+#include <chrono>      // vmlog -f 轮询
+#include <regex>       // 识别日志行前缀
+#include <thread>      // vmlog -f
+
 
 #include <cstring>
 #include <string>
@@ -113,6 +117,7 @@ void usage() {
         "状态:\n"
         "  info                    汇总状态（能力/活动 VM/版本/共享目录）\n"
         "  list                    枚举我们自己记录的虚拟机清单（见 preferences 下的清单文件）\n"
+        "  vmlog [-f]              只打印虚拟机串口日志（-f 跟随；其它模块的日志不打印）\n"
         "  vms [名字...]           按已知名字探测虚拟机（服务端无枚举接口）\n"
         "\n"
         "虚拟机生命周期（CfgInfo 为逆向手工构造，见 docs/api-notes.md）：\n"
@@ -580,6 +585,55 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
     return 2;
 }
 
+// ---------------------------------------------------------------- 串口日志
+//: 只打印虚拟机串口（-serial redirect-to-log → /data/log/hwf_service/vmlog）的内容。
+//: 串口行形如：
+//:   2026-..T..: [pid][tid][chardev_backend/src/chardev.rs:207]:INFO: <客户机原始输出>
+//: 客户机自己的一次输出可能跨多行，续行**没有**日志前缀，必须原样打印；
+//: 而 stratoVirt 其它模块的多行日志（例如 VmConfig 那种超长 dump）不跟在串口行后面，
+//: 因此不会被误当成串口输出。
+constexpr const char *kVmLogPath = "/data/log/hwf_service/vmlog";
+
+//: 匹配日志行前缀：<时间戳>: [pid][tid][模块:行]:LEVEL:
+static bool isLogPrefixed(const std::string &line) {
+    static const std::regex re(R"(^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^ ]*: \[\d+\]\[\d+\]\[[^\]]+\]:[A-Z]+:)");
+    return std::regex_search(line, re);
+}
+static bool isSerialLine(const std::string &line) {
+    return line.find("chardev_backend/src/chardev.rs") != std::string::npos;
+}
+//: 取日志前缀之后的内容
+static std::string stripLogPrefix(const std::string &line) {
+    std::size_t p = line.find("]:INFO: ");
+    if (p != std::string::npos) return line.substr(p + 7);
+    p = line.find("]:ERROR: ");
+    if (p != std::string::npos) return line.substr(p + 8);
+    return line;
+}
+
+//: 把整个文件（或新增部分）按上述规则过滤后写到 stdout；返回处理到的偏移
+static long long emitVmLog(std::istream &in, bool *inGuest, long long *lastPrint) {
+    std::string line;
+    long long printed = 0;
+    while (std::getline(in, line)) {
+        if (isSerialLine(line)) {
+            std::string text = stripLogPrefix(line);
+            printf("%s\n", text.c_str());
+            *inGuest = true;
+            ++printed;
+        } else if (!isLogPrefixed(line)) {
+            if (*inGuest) {           // 串口输出的续行（客户机自己换的行）
+                printf("%s\n", line.c_str());
+                ++printed;
+            }
+        } else {
+            *inGuest = false;         // 其它模块的日志：丢弃
+        }
+    }
+    if (lastPrint) *lastPrint = printed;
+    return printed;
+}
+
 // ------------------------------------------------------- 本地虚拟机清单（自管理）
 //: vm_manager 没有枚举接口（见 docs/api-notes.md §13），所以由我们自己记一份清单：
 //:     /data/storage/el2/base/preferences/hvm-cli-vms.list     （一行一个虚拟机名）
@@ -1017,6 +1071,41 @@ int run(int argc, char **argv) {
         if (!g_json)
             printf("\n注: vm_manager 未提供枚举接口，此表按已知名字探测得出。\n");
         return rc;
+    }
+    if (cmd == "vmlog") {
+        bool follow = false;
+        for (const auto &x : a.pos) if (x == "-f" || x == "--follow") follow = true;
+        std::ifstream in(kVmLogPath);
+        if (!in) return fail(cmd, -1, std::string("打不开 ") + kVmLogPath);
+        bool inGuest = false;
+        if (!follow) {                       // 一次性：全部串口日志
+            emitVmLog(in, &inGuest, nullptr);
+            return 0;
+        }
+        // 跟随：先给最近若干条，再持续输出新增内容
+        std::vector<std::string> kept;
+        std::string line;
+        while (std::getline(in, line)) {
+            if (isSerialLine(line)) { kept.push_back(stripLogPrefix(line)); inGuest = true; }
+            else if (!isLogPrefixed(line)) { if (inGuest) kept.push_back(line); }
+            else inGuest = false;
+        }
+        const std::size_t show = kept.size() > 20 ? kept.size() - 20 : 0;
+        for (std::size_t i = show; i < kept.size(); ++i) printf("%s\n", kept[i].c_str());
+        fflush(stdout);
+        std::streampos pos = in.tellg();
+        for (;;) {                            // 轮询新增内容
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::ifstream more(kVmLogPath);
+            if (!more) continue;
+            more.seekg(pos);
+            if (!more) continue;
+            emitVmLog(more, &inGuest, nullptr);
+            fflush(stdout);
+            pos = more.tellg();
+            if (pos == std::streampos(-1)) pos = 0;
+        }
+        return 0;
     }
     if (cmd == "list") {
         // 枚举我们自己记录的虚拟机清单（vm create 时追加、vm destroy 时移除）
