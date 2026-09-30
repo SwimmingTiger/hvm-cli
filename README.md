@@ -264,6 +264,11 @@ $ ./hvm-cli --vm myvm snapshot list       # 快照列表
 $ ./hvm-cli --vm myvm net ip              # 客户机 IPv4（需客户机已联网）
 ```
 
+> **需不需要给虚拟机名？** 写操作（`stop` / `force-stop` / `disk expand` / `share add`
+> / `snapshot restore` / `net mode` …）**必须**显式给名字（位置参数或 `--vm <名字>`），
+> 省略会直接报错；读操作（`disk path` / `net ip` / `snapshot list` …）可以省略，
+> 此时按"当前虚拟机"处理，并会先把你用到的名字打印出来。
+>
 > **怎么知道一台虚拟机是不是已经被销毁？** 注意状态码 `0` 对「已停止」和「已销毁」
 > 是**同一个值**，不能拿它判断存在性。可靠依据是磁盘镜像：
 > `list` / `vms` 会把没有磁盘的条目标成 `(无，已失效)`，

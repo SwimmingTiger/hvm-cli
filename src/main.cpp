@@ -122,6 +122,13 @@ void usage() {
         "\n"
         "用法: hvm-cli [--json] [--vm <名字>] <命令> [参数...]\n"
         "\n"
+        "关于虚拟机名:\n"
+        "  需要指定虚拟机的命令（stop / force-stop / net / disk / share / snapshot …）\n"
+        "  用位置参数或 --vm <名字> 给出（哪些命令支持位置形式见各命令自己的提示）。\n"
+        "  · 写操作**必须**显式给名字，省略会直接报错、不会替你猜；\n"
+        "  · 读操作可以省略，此时按\"当前虚拟机\"处理，并会先把用到的名字打印出来。\n"
+        "  （源码里不再有任何\"默认虚拟机名\"。）\n"
+        "\n"
         "运行环境:\n"
         "  必须在系统自带的 HiShell 终端中运行。\n"
         "  原因：只有 HiShell 终端在虚拟机白名单内 —— vm_manager 对每个请求校验\n"
@@ -191,8 +198,8 @@ void usage() {
         "  is-installing           是否安装中\n"
         "\n"
         "电源:\n"
-        "  stop [名字] [--clean]   正常关机（服务端 StopVm）\n"
-        "  force-stop [名字]       强制关机（服务端 ForceStopVm）\n"
+        "  stop <名字> [--clean]   正常关机（服务端 StopVm）\n"
+        "  force-stop <名字>       强制关机（服务端 ForceStopVm）\n"
         "  quit-by-reboot-host     宿主机重启导致退出\n"
         "  require-big-mem         申请大内存\n"
         "\n"
@@ -252,7 +259,10 @@ void usage() {
 // ---------------------------------------------------------------- 主逻辑
 struct Args {
     std::vector<std::string> pos;
-    std::string vm = hvm::kLinuxVm;
+    //: 只有 --vm 显式给出时才非空。不再有任何"默认虚拟机名" ——
+    //: 早期那句 `= hvm::kLinuxVm` 会让不带名字的命令悄悄作用在 virtualized_linux 上，
+    //: 对 force-stop / snapshot destroy / disk expand 这类写操作是危险的。
+    std::string vm;
     bool full = false;
 };
 
@@ -405,11 +415,41 @@ std::string toServicePath(const std::string &in) {
     return std::string(kMediaPrefix) + currentUserId() + "/local/files/Docs/" + rest;
 }
 
+//: 解析"要操作哪台虚拟机"。
+//:   positional = true  允许用位置参数给名字（如 `stop <名字>`）；否则只看 --vm
+//:   write      = true  写操作：必须显式给名字，否则报错返回空串
+//:   write      = false 读操作：允许省略，此时回落到"当前虚拟机"并**把名字打出来**
+//:                      （不打出来就等于在替用户猜，这正是要避免的）
+//: 返回空串表示调用方应直接 return 2（原因已经打印清楚了）。
+std::string resolveVm(Client &c, const Args &a, const std::string &cmd, bool positional, bool write) {
+    if (positional && !a.pos.empty()) return a.pos[0];
+    if (!a.vm.empty()) return a.vm;
+    if (write) {
+        // 位置参数能不能给名字，取决于命令本身（如 `stop <名字>` 可以，
+        // 而 `share add`/`net mode` 的第一个位置参数是自己的参数），提示要如实。
+        if (positional)
+            fprintf(stderr, "%s 需要指定虚拟机：%s <名字>，或 --vm <名字>\n", cmd.c_str(),
+                    cmd.c_str());
+        else
+            fprintf(stderr, "%s 需要指定虚拟机：--vm <名字>\n", cmd.c_str());
+        return {};
+    }
+    std::string cur;
+    if (c.activeVmName(cur) == 0 && !cur.empty()) {
+        fprintf(stderr, "（未指定虚拟机，按当前虚拟机 %s 处理）\n", cur.c_str());
+        return cur;
+    }
+    fprintf(stderr, "%s 需要指定虚拟机：--vm <名字>（当前也没有可用的当前虚拟机）\n",
+            cmd.c_str());
+    return {};
+}
+
 // ---------------------------------------------------------------- LinuxFusion / RGM 运维
 //: 这一组都是 kit 接口直通：签名已由 include/ohos/vm_manager_service/vm_manager_kits.h
 //: 给出（编译器生成的符号名），不需要构造任何私有类。
 static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
-    const std::string &vm = a.vm;
+    // 注意：这里不再统一取 a.vm —— 有些子命令不需要虚拟机名（pause/lock-guest/…），
+    // 有些需要（resume/recover-user-data/…），需要时才解析，避免误报"缺少名字"。
     auto onoff = [](const std::string &v) {
         return v == "on" || v == "1" || v == "true" || v == "enable";
     };
@@ -433,7 +473,8 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
         return 0;
     }
     if (cmd == "resume") {
-        std::string name = a.pos.empty() ? vm : a.pos[0];
+        std::string name = resolveVm(c, a, "resume", /*positional=*/true, /*write=*/true);
+        if (name.empty()) return 2;
         int rc = c.resumeVm(name);
         if (rc != 0) return fail(cmd, rc, "ResumeVm 失败");
         printf("已请求恢复 %s\n", name.c_str());
@@ -445,11 +486,14 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
             fprintf(stderr, "lx-snapshot <快照名> <操作码>\n");
             return 2;
         }
+        const std::string vm = resolveVm(c, a, "lx-snapshot", false, true);
+        if (vm.empty()) return 2;
         return report(c.handleLxSnapshot(vm, a.pos[0], atoi(a.pos[1].c_str())),
                       "处理 Linux 虚拟机快照");
     }
     if (cmd == "rgm-status") {
-        std::string name = a.pos.empty() ? vm : a.pos[0];
+        std::string name = resolveVm(c, a, "rgm-status", /*positional=*/true, /*write=*/false);
+        if (name.empty()) return 2;
         int st = c.rgmImageStatusFromVm(name);
         if (st == OHOS_VM_ERR_SYMBOL_MISSING) return fail(cmd, st, "GetRgmImageStatusFromVm 失败");
         if (g_json) {
@@ -466,6 +510,8 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
             fprintf(stderr, "recover-user-data <路径>\n");
             return 2;
         }
+        const std::string vm = resolveVm(c, a, "recover-user-data", false, true);
+        if (vm.empty()) return 2;
         return report(c.recoverUserData(vm, a.pos[0]), "恢复用户数据");
     }
     if (cmd == "autopause") {
@@ -474,6 +520,8 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
             return 2;
         }
         int32_t m = static_cast<int32_t>(atoi(a.pos[0].c_str()));
+        const std::string vm = resolveVm(c, a, "autopause", false, true);
+        if (vm.empty()) return 2;
         return report(c.setAutoPauseTime(vm, m), "设置自动暂停时间");
     }
     if (cmd == "lx-ota") return report(c.lxOtaHandle(), "Linux 环境 OTA");
@@ -523,6 +571,8 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
             fprintf(stderr, "gallery-share on|off\n");
             return 2;
         }
+        const std::string vm = resolveVm(c, a, "gallery-share", false, true);
+        if (vm.empty()) return 2;
         return report(c.setHostGalleryShared(vm, onoff(a.pos[0])), "设置图库共享");
     }
     if (cmd == "guest-disk-share") {
@@ -530,6 +580,8 @@ static int cmdFusion(Client &c, const std::string &cmd, const Args &a) {
             fprintf(stderr, "guest-disk-share <路径> on|off\n");
             return 2;
         }
+        const std::string vm = resolveVm(c, a, "guest-disk-share", false, true);
+        if (vm.empty()) return 2;
         return report(c.setGuestDiskShared(vm, a.pos[0], onoff(a.pos[1])), "设置客户机磁盘共享");
     }
     if (cmd == "pasteboard") {
@@ -765,6 +817,10 @@ bool vmExists(Client &c, const std::string &name, std::string *diskOut = nullptr
     if (diskOut != nullptr) *diskOut = path;
     return rc == 0 && !path.empty();
 }
+
+//: vms 无参时探测的"框架已知名字"。它只是一个**探测名单**，
+//: 不再充当任何命令的默认虚拟机名（见 Args::vm 的说明）。
+constexpr const char *kProbeVmNames[] = {hvm::kLinuxVm};
 
 // ---------------------------------------------------------------- vm 子命令
 //: CfgInfo 是华为私有类型（无公开头文件），这里按逆向配方手工构造。
@@ -1189,8 +1245,12 @@ int run(int argc, char **argv) {
     }
 
     if (cmd == "vms") {
-        std::vector<std::string> names =
-            a.pos.empty() ? std::vector<std::string>{a.vm} : a.pos;
+        std::vector<std::string> names;
+        if (a.pos.empty()) {
+            for (const char *p : kProbeVmNames) names.push_back(p);   // 只是探测名单
+        } else {
+            names = a.pos;
+        }
         int rc = printVmTable(c, "vms", names);
         if (!g_json)
             printf("\n注: vm_manager 未提供枚举接口，此表按已知名字探测得出。\n");
@@ -1370,8 +1430,17 @@ int run(int argc, char **argv) {
         return 0;
     }
     if (cmd == "vmstat") {
+        if (a.pos.empty() && a.vm.empty()) {
+            // 无参 = 列出所有已知虚拟机的状态（与 list / vms 同一张表，
+            // 顺带会标出哪些条目在服务端已不存在）
+            std::vector<std::string> names = registryLoad();
+            for (const char *p : kProbeVmNames)
+                if (std::find(names.begin(), names.end(), p) == names.end()) names.push_back(p);
+            return printVmTable(c, "vmstat", names);
+        }
         int st = 0;
-        std::string vm = a.pos.empty() ? a.vm : a.pos[0];
+        std::string vm = resolveVm(c, a, "vmstat", /*positional=*/true, /*write=*/false);
+        if (vm.empty()) return 2;
         int rc = c.vmStatus(vm, st);
         if (rc != 0) return fail(cmd, rc, "GetVmStatus 失败");
         // 状态码 0 分不清"已停止"和"已销毁"，再查一次磁盘才能给出确定答案
@@ -1472,7 +1541,8 @@ int run(int argc, char **argv) {
     // ------------------------------------------------------------ 电源
     if (cmd == "stop") {
         // 服务端 StopVm(name, bool)：正常关机（force-stop 是 ForceStopVm 强制关机）
-        std::string vm = a.pos.empty() ? a.vm : a.pos[0];
+        std::string vm = resolveVm(c, a, "stop", /*positional=*/true, /*write=*/true);
+        if (vm.empty()) return 2;
         bool clean = false;
         for (std::size_t i = 1; i < a.pos.size(); ++i) {
             if (a.pos[i] == "--clean") clean = true;
@@ -1489,7 +1559,8 @@ int run(int argc, char **argv) {
         return 0;
     }
     if (cmd == "force-stop") {
-        std::string vm = a.pos.empty() ? a.vm : a.pos[0];
+        std::string vm = resolveVm(c, a, "force-stop", /*positional=*/true, /*write=*/true);
+        if (vm.empty()) return 2;
         int rc = c.forceStop(vm);
         if (rc != 0) return fail(cmd, rc, "ForceStopVm 失败");
         if (g_json) {
@@ -1528,7 +1599,8 @@ int run(int argc, char **argv) {
     if (cmd == "snapshot") {
         NEED_ARGS(1, "hvm-cli snapshot list|create|restore|destroy|rename [参数]");
         const std::string &act = a.pos[0];
-        std::string vm = a.vm;
+        std::string vm = resolveVm(c, a, "snapshot", /*positional=*/false, /*write=*/act != "list");
+        if (vm.empty()) return 2;
         if (act == "list") {
             std::vector<std::pair<std::string, std::string>> snaps;
             int rc = c.snapshotList(vm, snaps);
@@ -1609,7 +1681,9 @@ int run(int argc, char **argv) {
             return 0;
         }
         if (act == "setup") {
-            int rc = c.setupSharedFolder(a.vm);
+            const std::string vm = resolveVm(c, a, "share setup", false, true);
+            if (vm.empty()) return 2;
+            int rc = c.setupSharedFolder(vm);
             if (rc != 0) return fail(cmd, rc, "SetUpSharedFolder 失败");
             if (g_json) {
                 Json j("share setup");
@@ -1621,7 +1695,9 @@ int run(int argc, char **argv) {
         }
         if (act == "add") {
             NEED_ARGS(3, "hvm-cli share add <宿主路径> <客机路径>");
-            int rc = c.addSharedFolder(a.vm, a.pos[1], a.pos[2]);
+            const std::string vm = resolveVm(c, a, "share add", false, true);
+            if (vm.empty()) return 2;
+            int rc = c.addSharedFolder(vm, a.pos[1], a.pos[2]);
             if (rc != 0) return fail(cmd, rc, "AddSharedFolder 失败");
             if (g_json) {
                 Json j("share add");
@@ -1634,7 +1710,9 @@ int run(int argc, char **argv) {
         }
         if (act == "remove") {
             NEED_ARGS(2, "hvm-cli share remove <宿主路径>");
-            int rc = c.removeSharedFolder(a.vm, a.pos[1]);
+            const std::string vm = resolveVm(c, a, "share remove", false, true);
+            if (vm.empty()) return 2;
+            int rc = c.removeSharedFolder(vm, a.pos[1]);
             if (rc != 0) return fail(cmd, rc, "RemoveSharedFolder 失败");
             if (g_json) {
                 Json j("share remove");
@@ -1654,9 +1732,11 @@ int run(int argc, char **argv) {
                       "proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off");
         const std::string &act = a.pos[0];
         if (act == "ports" || act == "localhost-ports") {
+            const std::string vm = resolveVm(c, a, "net " + act, false, /*write=*/false);
+            if (vm.empty()) return 2;
             std::vector<std::array<std::uint32_t, 3>> v;
-            int rc = (act == "ports") ? c.getPortForwardForNat(a.vm, v)
-                                      : c.getLocalhostForwardFromVmToHost(a.vm, v);
+            int rc = (act == "ports") ? c.getPortForwardForNat(vm, v)
+                                      : c.getLocalhostForwardFromVmToHost(vm, v);
             if (rc != 0)
                 return fail(cmd, rc, act == "ports" ? "GetPortForwardForNat 失败"
                                                     : "GetLocalhostForwardFromVmToHost 失败");
@@ -1677,26 +1757,34 @@ int run(int argc, char **argv) {
             }
             int32_t mode = (a.pos[1] == "nat" || a.pos[1] == "1") ? 1 : 0;   // MODE_NAT=1, MODE_BRIDGE=0
             std::string iface = a.pos.size() > 2 ? a.pos[2] : std::string();
-            int rc = c.setVmNetMode(a.vm, mode, iface);
+            const std::string vm = resolveVm(c, a, "net mode", false, true);
+            if (vm.empty()) return 2;
+            int rc = c.setVmNetMode(vm, mode, iface);
             if (rc != 0) return fail(cmd, rc, "SetVmNetMode 失败");
             printf("已设置网络模式: %s\n", mode == 1 ? "NAT" : "桥接");
             return 0;
         }
         if (act == "proxy-status-on" || act == "proxy-status-off") {
-            int rc = c.setVmHostNetProxyStatus(a.vm, act == "proxy-status-on");
+            const std::string vm = resolveVm(c, a, "net " + act, false, true);
+            if (vm.empty()) return 2;
+            int rc = c.setVmHostNetProxyStatus(vm, act == "proxy-status-on");
             if (rc != 0) return fail(cmd, rc, "SetVmHostNetProxyStatus 失败");
             printf("已设置宿主网络代理状态: %s\n", act == "proxy-status-on" ? "开" : "关");
             return 0;
         }
         if (act == "proxy-auto-on" || act == "proxy-auto-off") {
-            int rc = c.setProxyAutoSyncEnabled(a.vm, act == "proxy-auto-on");
+            const std::string vm = resolveVm(c, a, "net " + act, false, true);
+            if (vm.empty()) return 2;
+            int rc = c.setProxyAutoSyncEnabled(vm, act == "proxy-auto-on");
             if (rc != 0) return fail(cmd, rc, "SetProxyAutoSyncEnabled 失败");
             printf("已设置代理自动同步: %s\n", act == "proxy-auto-on" ? "开" : "关");
             return 0;
         }
         if (act == "ip") {
+            const std::string vm = resolveVm(c, a, "net ip", false, /*write=*/false);
+            if (vm.empty()) return 2;
             std::string ip;
-            int rc = c.vmIpv4Address(a.vm, ip);
+            int rc = c.vmIpv4Address(vm, ip);
             if (rc != 0) return fail(cmd, rc, "GetVmIpv4Address 失败");
             if (g_json) {
                 Json j("net ip");
@@ -1708,8 +1796,10 @@ int run(int argc, char **argv) {
             return 0;
         }
         if (act == "proxy") {
+            const std::string vm = resolveVm(c, a, "net proxy", false, /*write=*/false);
+            if (vm.empty()) return 2;
             bool on = false;
-            int rc = c.hostNetProxyStatus(a.vm, on);
+            int rc = c.hostNetProxyStatus(vm, on);
             if (rc != 0) return fail(cmd, rc, "GetVmHostNetProxyStatus 失败");
             if (g_json) {
                 Json j("net proxy");
@@ -1721,8 +1811,10 @@ int run(int argc, char **argv) {
             return 0;
         }
         bool on = act == "share-on" || act == "dns-on";
-        int rc = (act == "dns-on" || act == "dns-off") ? c.setDnsAutoSync(a.vm, on)
-                                                       : c.switchNetworkShare(a.vm, on);
+        const std::string vm = resolveVm(c, a, "net " + act, false, true);
+        if (vm.empty()) return 2;
+        int rc = (act == "dns-on" || act == "dns-off") ? c.setDnsAutoSync(vm, on)
+                                                       : c.switchNetworkShare(vm, on);
         if (rc != 0) return fail(cmd, rc, "网络设置失败");
         if (g_json) {
             Json j("net " + act);
@@ -1738,9 +1830,11 @@ int run(int argc, char **argv) {
         NEED_ARGS(1, "hvm-cli disk capacity|path|size|expand|delete-data");
         const std::string &act = a.pos[0];
         if (act == "capacity" || act == "size") {
+            const std::string vm = resolveVm(c, a, "disk " + act, false, /*write=*/false);
+            if (vm.empty()) return 2;
             int64_t bytes = 0;
-            int rc = (act == "capacity") ? c.diskCapacity(a.vm, bytes)
-                                         : c.diskImageFileSize(a.vm, bytes);
+            int rc = (act == "capacity") ? c.diskCapacity(vm, bytes)
+                                         : c.diskImageFileSize(vm, bytes);
             if (rc != 0) return fail(cmd, rc, "查询磁盘失败");
             if (g_json) {
                 Json j("disk " + act);
@@ -1752,8 +1846,10 @@ int run(int argc, char **argv) {
             return 0;
         }
         if (act == "path") {
+            const std::string vm = resolveVm(c, a, "disk path", false, /*write=*/false);
+            if (vm.empty()) return 2;
             std::string p;
-            int rc = c.diskImagePath(a.vm, p);
+            int rc = c.diskImagePath(vm, p);
             if (rc != 0) return fail(cmd, rc, "GetVmDiskImagePath 失败");
             if (g_json) {
                 Json j("disk path");
@@ -1766,7 +1862,9 @@ int run(int argc, char **argv) {
         }
         if (act == "expand") {
             NEED_ARGS(2, "hvm-cli disk expand <GB>");
-            int rc = c.expandCapacity(a.vm, std::atoi(a.pos[1].c_str()));
+            const std::string vm = resolveVm(c, a, "disk expand", false, true);
+            if (vm.empty()) return 2;
+            int rc = c.expandCapacity(vm, std::atoi(a.pos[1].c_str()));
             if (rc != 0) return fail(cmd, rc, "VmExpandCapacity 失败");
             if (g_json) {
                 Json j("disk expand");
