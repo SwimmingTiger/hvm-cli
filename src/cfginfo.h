@@ -30,6 +30,30 @@ class CfgInfoBuilder {
     void setEnhanceFilePath(const std::string &v);  // +56  string
     void setStartType(int v);                 // +80  默认 -1，合法 0..3
 
+    // 以下四个字段位于 deviceInfo（+88）子对象内，字段名取自 libvmmanager_napi.z.so
+    // 的 jsKey（Unwrap*ByPropertyName 的实参），语义由 Engine::NetConfig 的读取方式确认：
+    //   netMode(int, +228/deviceInfo+140)、nicName(string, +232/+144)、
+    //   bridgeIp(string, +256/+168)、networkDevice(bool, +284/+196, 为真则模式取 1=NAT)。
+    // Engine::CheckBeforeStartVm → Engine::NetConfig(CfgInfo, …) → NetManager::AllocateNet
+    //   → DefaultNetConfig/BridgeNetConfig → VmNetProperties::SetNetConfigInfo
+    // 实测（不要照抄推测）：**这些字段要在 create 时就给**。
+    //   create … --net nat  → 虚拟机有网卡（virtio-net-pci + 宿主 tap WVMTap…）✓
+    //   只把 --net nat 加在 start 上 → 没有网卡 ✗
+    // 也就是网络字段要进 create 时那份存档配置；StartVm 传的 CfgInfo 起不到这个作用
+    // （与 Engine::CheckBeforeStartVm 里的磁盘检查门槛共同作用，详见 docs/iso-install-notes.md §3/§4）。
+    //: 字段名取自 napi 库 UnwrapNetworkDevice 的 Unwrap*ByPropertyName 实参，
+    //: 偏移与 Engine::NetConfig / NetManager::SetNetConfig 的读取逐一对应（已核对）。
+    void setNetMode(int v);                          // +228 int    netMode（0=桥接，1=NAT）
+    void setNicName(const std::string &v);           // +232 string nicName（桥接时要给宿主物理网卡名）
+    void setBridgeIp(const std::string &v);          // +256 string bridgeIp（桥接 IP）
+    void setProxyAutoSyncEnabled(bool v);            // +280 bool   proxyAutoSyncEnabled
+    void setDnsAutoSyncEnabled(bool v);              // +281 bool   dnsAutoSyncEnabled
+    void setHostNetworkSyncFeatureEnabled(bool v);   // +282 bool   isHostNetworkSyncFeatureEnabled
+    void setNetworkShareSupported(bool v);           // +283 bool   isNetworkShareSupported
+    void setNetworkDevice(bool v);                   // +284 bool   networkDevice 子对象开关；
+                                                     //   为真时 Engine::NetConfig 强制 netMode=1（NAT），
+                                                     //   所以**桥接必须置 false**
+
     //: 生成对象的可读摘要（字段当前值）
     std::string dump() const;
 

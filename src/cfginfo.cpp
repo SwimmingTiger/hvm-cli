@@ -133,6 +133,38 @@ void CfgInfoBuilder::setStartType(int v) {
     if (obj_) *reinterpret_cast<std::int32_t *>(static_cast<char *>(obj_) + 80) = v;
 }
 
+void CfgInfoBuilder::setNetMode(int v) {
+    if (obj_) *reinterpret_cast<std::int32_t *>(static_cast<char *>(obj_) + 228) = v;
+}
+
+void CfgInfoBuilder::setNicName(const std::string &v) {
+    if (obj_) new (static_cast<char *>(obj_) + 232) std::string(v);
+}
+
+void CfgInfoBuilder::setBridgeIp(const std::string &v) {
+    if (obj_) new (static_cast<char *>(obj_) + 256) std::string(v);
+}
+
+void CfgInfoBuilder::setProxyAutoSyncEnabled(bool v) {
+    if (obj_) *reinterpret_cast<bool *>(static_cast<char *>(obj_) + 280) = v;
+}
+
+void CfgInfoBuilder::setDnsAutoSyncEnabled(bool v) {
+    if (obj_) *reinterpret_cast<bool *>(static_cast<char *>(obj_) + 281) = v;
+}
+
+void CfgInfoBuilder::setHostNetworkSyncFeatureEnabled(bool v) {
+    if (obj_) *reinterpret_cast<bool *>(static_cast<char *>(obj_) + 282) = v;
+}
+
+void CfgInfoBuilder::setNetworkShareSupported(bool v) {
+    if (obj_) *reinterpret_cast<bool *>(static_cast<char *>(obj_) + 283) = v;
+}
+
+void CfgInfoBuilder::setNetworkDevice(bool v) {
+    if (obj_) *reinterpret_cast<bool *>(static_cast<char *>(obj_) + 284) = v;
+}
+
 MigrationOptionsBuilder::MigrationOptionsBuilder() {
     NapiLib &lib = napiLib();
     if (!lib.ok()) {

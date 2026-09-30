@@ -143,6 +143,7 @@ void usage() {
         "状态:\n"
         "  info                    汇总状态（能力/当前 VM/版本/共享目录）\n"
         "  list                    枚举我们自己记录的虚拟机清单（见 preferences 下的清单文件）\n"
+        "  start --net nat|bridge [--nic 网卡] [--bridge-ip IP] [--proxy-sync] [--dns-sync]\n"
         "  vmlog [-f]              只打印虚拟机串口日志（-f 跟随；其它模块的日志不打印）\n"
         "  vms [名字...]           按已知名字探测虚拟机（服务端无枚举接口）\n"
         "\n"
@@ -862,6 +863,17 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     int cpu = 0, mem = 0, disk = 0, startType = -1;
     bool partition = false, dynMem = false;
     bool keepSnapshots = false, forceImport = false;
+    //: --net nat|bridge：显式给虚拟机建立网络。原理（逆向确认）：
+    //: Engine::CheckBeforeStartVm → Engine::NetConfig(CfgInfo,…) → NetManager::AllocateNet
+    //: → DefaultNetConfig/BridgeNetConfig → VmNetProperties::SetNetConfigInfo。
+    //: 也就是网络是**宿主侧按 CfgInfo 里的字段分配**的。
+    //: 实测：这些字段要在 **create** 时就给 —— create --net nat 会生成网卡，
+    //: 只加在 start 上则没有网卡。所以发布流程里 create 必须带 --net。
+    std::string netMode;                 // --net nat|bridge|none
+    std::string netNic;                  // --nic     桥接要用的宿主物理网卡名（NAT 不用）
+    std::string netBridgeIp;             // --bridge-ip  桥接 IP
+    bool netProxySync = false, netDnsSync = false;
+    bool netHostSync = false, netShare = false;
     std::string password;
     std::string chanName = "winbox_serial0";
     unsigned chanType = 0;
@@ -872,6 +884,13 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         const std::string &k = pos[i];
         if (k == "--keep-snapshots") { keepSnapshots = true; continue; }
         if (k == "--force-import") { forceImport = true; continue; }
+        else if (k == "--net" && i + 1 < pos.size()) { netMode = pos[++i]; continue; }
+        else if (k == "--nic" && i + 1 < pos.size()) { netNic = pos[++i]; continue; }
+        else if (k == "--bridge-ip" && i + 1 < pos.size()) { netBridgeIp = pos[++i]; continue; }
+        else if (k == "--proxy-sync") { netProxySync = true; continue; }
+        else if (k == "--dns-sync") { netDnsSync = true; continue; }
+        else if (k == "--host-net-sync") { netHostSync = true; continue; }
+        else if (k == "--net-share") { netShare = true; continue; }
         if (k == "--partition") { partition = true; continue; }
         if (k == "--dynamic-mem") { dynMem = true; continue; }
         if (k.size() != 0 && k[0] != '-') { name = k; continue; }
@@ -934,6 +953,33 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
     if (!bios.empty()) cfg.setBiosPath(bios);
     if (!enhance.empty()) cfg.setEnhanceFilePath(enhance);
     cfg.setStartType(startType);
+    //: 网络字段（字段名与偏移见 cfginfo.h 的说明；全部来自 napi UnwrapNetworkDevice 与
+    //: Engine::NetConfig / NetManager::SetNetConfig 的交叉核对）。
+    //: 关键点：+284(networkDevice) 为真时 Engine::NetConfig 会**强制** netMode=1(NAT)，
+    //: 所以走桥接必须把它置 false，否则填的 netMode=0 会被覆盖。
+    if (netMode == "nat") {
+        cfg.setNetworkDevice(true);          // → netMode 取 1（NAT）
+        cfg.setNetMode(1);
+        if (!netNic.empty()) cfg.setNicName(netNic);
+        if (!netBridgeIp.empty()) cfg.setBridgeIp(netBridgeIp);
+    } else if (netMode == "bridge") {
+        cfg.setNetworkDevice(false);         // ★ 必须 false，否则被强制成 NAT
+        cfg.setNetMode(0);                   // 0 = 桥接（VmNetProperties::IsBridgeMode 判定 mode==0）
+        if (netNic.empty()) {
+            fprintf(stderr, "桥接模式需要 --nic <宿主物理网卡名>（例如 --nic eth0）\n");
+            return 2;
+        }
+        cfg.setNicName(netNic);
+        if (!netBridgeIp.empty()) cfg.setBridgeIp(netBridgeIp);
+    } else if (!netMode.empty() && netMode != "none") {
+        fprintf(stderr, "未知的 --net 取值: %s（可用 nat / bridge / none）\n", netMode.c_str());
+        return 2;
+    }
+    if (netProxySync) cfg.setProxyAutoSyncEnabled(true);
+    if (netDnsSync) cfg.setDnsAutoSyncEnabled(true);
+    if (netHostSync) cfg.setHostNetworkSyncFeatureEnabled(true);
+    if (netShare) cfg.setNetworkShareSupported(true);
+
 
     if (act == "view-state") {
         // 上报 HapViewState（应用用它告诉服务端视图状态）。取值实测见服务端分支：
