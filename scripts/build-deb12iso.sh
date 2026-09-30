@@ -188,7 +188,7 @@ esac
 LOG() { echo "[\$(date +%H:%M:%S)] \$*" | tee -a /dev/console; }
 
 LOG "安装开始：目标盘 \$DISK"
-if [ ! -b "\$DISK" ]; then LOG "找不到目标盘 \$DISK —— 无法继续，停在这里等待排查（不动磁盘）"; sleep 3600; fi
+if [ ! -b "\$DISK" ]; then LOG "错误：找不到目标盘 \$DISK，安装中止（请检查虚拟机配置）"; exit 1; fi
 
 # squashfs 就在 ISO 上；unsquashfs 直接读文件 —— 不用 loop、不用 mount
 SQ=""
@@ -197,7 +197,7 @@ for c in /run/live/medium/live/filesystem.squashfs \
          /cdrom/live/filesystem.squashfs; do
     if [ -f "\$c" ]; then SQ="\$c"; break; fi
 done
-if [ -z "\$SQ" ]; then LOG "找不到 squashfs —— 无法继续，停在这里等待排查（不动磁盘）"; sleep 3600; fi
+if [ -z "\$SQ" ]; then LOG "错误：找不到 squashfs，安装中止（请检查 ISO 的 /live 目录）"; exit 1; fi
 LOG "squashfs 来源：\$SQ"
 
 # 分区：512MiB ESP + 其余全部给根（与 build-deb12min.sh 一致）
