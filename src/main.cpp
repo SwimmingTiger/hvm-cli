@@ -176,7 +176,7 @@ void usage() {
 
         "  screen-lock-task on|off 锁屏任务开关\n"
         "  tablet <int>            平板切换上报\n"
-        "  vm-info                 活动虚拟机的 DDR 大小与进程 PID\n"
+        "  vminfo                  活动虚拟机的 DDR 大小与进程 PID\n"
         "  stratovirt-mem          stratoVirt 占用内存（字节）\n"
         "  host-sn                 宿主 SN\n"
         "  capability              本机是否支持虚拟化\n"
@@ -1226,7 +1226,7 @@ int run(int argc, char **argv) {
             printf("\n清单文件: %s（%zu 台）\n", kRegistryPath, names.size());
         return rc;
     }
-    if (cmd == "vm-info") {
+    if (cmd == "vminfo") {
         uint32_t ddr = 0, pid = 0;
         int rc = c.getVmInfo(ddr, pid);
         if (rc != 0) return fail(cmd, rc, "GetVmInfo 失败（可能没有活动虚拟机）");

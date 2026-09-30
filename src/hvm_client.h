@@ -26,7 +26,7 @@ enum class VmStatus : int {
     Unknown = -1,
     None = 0,
     // 以下为实测观察值（枚举本身未导出，仅记录已验证的取值）
-    Running = 9,  // 启动后：vm-info 能取到 stratoVirt 进程 PID、DDR 大小非 0
+    Running = 9,  // 启动后：vminfo 能取到 stratoVirt 进程 PID、DDR 大小非 0
 };
 
 const char *statusName(int status);

@@ -28,7 +28,7 @@
 
 ## hvm-cli：虚拟机管理
 
-命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vm-info`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vm-status`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、`export`、`import`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`hash-name`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
+命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vminfo`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vm-status`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、`export`、`import`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`hash-name`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
 
 > **常用：导出 / 导入虚拟机磁盘** —— 把某台虚拟机的磁盘导出成文件，或把一个镜像文件导入成一台新虚拟机，见[导出与导入虚拟机磁盘](#hvm-cli导出与导入虚拟机磁盘)。
 
@@ -200,7 +200,7 @@ $ pgrep -a stratovirt | grep myvm        # create 那次启动时命令行里能
 
 | 操作 | 光盘 | 实测 |
 |---|---|---|
-| **`create`** | 安装盘（`--image`）+ 扩展盘（`--enhance`）**两张都会挂上** | `create` 返回 rc=0 后立刻能查到 `stratovirt` 进程（状态 9、`vm-info` 给出 PID），其命令行里 `media=cdrom` 计数为 **2** |
+| **`create`** | 安装盘（`--image`）+ 扩展盘（`--enhance`）**两张都会挂上** | `create` 返回 rc=0 后立刻能查到 `stratovirt` 进程（状态 9、`vminfo` 给出 PID），其命令行里 `media=cdrom` 计数为 **2** |
 | **之后的任何 `start`** | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` | 对该虚拟机执行 `start --image … --enhance …`，命令行里只有 UEFI 固件、磁盘、UEFI vars，`media=cdrom` 计数为 **0** |
 
 也就是说：**`CreateVm` 会顺带完成一次启动**（安装阶段就是这一次），安装介质也只在这一次挂上；

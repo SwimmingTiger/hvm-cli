@@ -371,7 +371,7 @@ hvm::CfgInfoBuilder::setCpuNum(int):
 ```
 活动虚拟机 : win11
 磁盘镜像   : /data/service/el0/virt_service/100/vm_manager/177c554b/win11/img/vm.qcow2
-状态码     : 9（实测：stratoVirt 进程在跑、vm-info 能取到 PID）
+状态码     : 9（实测：stratoVirt 进程在跑、vminfo 能取到 PID）
 ```
 
 服务端校验链的**完整顺序**（日志逐条对应，便于排错）：
