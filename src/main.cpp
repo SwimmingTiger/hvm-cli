@@ -690,6 +690,42 @@ static std::string stripLogPrefix(const std::string &line) {
     return line;
 }
 
+//: 串口日志里的中文会被某一层"按 Latin-1 解释、再按 UTF-8 编码"，于是显示成
+//: å®è£… 这种乱码。这里做一次**无损**逆变换：把每个码位 ≤0xFF 的字符映射回单字节
+//: （Latin-1），得到的就是原本的 UTF-8 字节 —— Latin-1 在 0x00–0xFF 上是双射，
+//: 所以不丢信息。仅在"整行都在 Latin-1 范围、且还原后是合法 UTF-8"时启用，
+//: 避免把真正的多字节文本改坏（不满足条件就原样返回）。
+static bool utf8DecodeAll(const std::string &s, std::vector<unsigned> &cp) {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        unsigned v; int n;
+        if (c < 0x80) { v = c; n = 1; }
+        else if ((c & 0xE0) == 0xC0) { v = c & 0x1Fu; n = 2; }
+        else if ((c & 0xF0) == 0xE0) { v = c & 0x0Fu; n = 3; }
+        else if ((c & 0xF8) == 0xF0) { v = c & 0x07u; n = 4; }
+        else return false;
+        if (i + static_cast<std::size_t>(n) > s.size()) return false;
+        for (int k = 1; k < n; ++k) {
+            unsigned char cc = static_cast<unsigned char>(s[i + k]);
+            if ((cc & 0xC0) != 0x80) return false;
+            v = (v << 6) | (cc & 0x3Fu);
+        }
+        cp.push_back(v); i += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+static std::string demojibake(const std::string &s) {
+    std::vector<unsigned> cp;
+    if (!utf8DecodeAll(s, cp)) return s;                  // 本身就不是合法 UTF-8：原样
+    for (unsigned v : cp) if (v > 0xFFu) return s;        // 含真正的多字节字符：原样
+    std::string out; out.reserve(cp.size());
+    for (unsigned v : cp) out.push_back(static_cast<char>(v));
+    std::vector<unsigned> chk;
+    if (!utf8DecodeAll(out, chk)) return s;               // 还原后不是合法 UTF-8：原样
+    return out;
+}
+
 //: 把整个文件（或新增部分）按上述规则过滤后写到 stdout；返回处理到的偏移
 static long long emitVmLog(std::istream &in, bool *inGuest, long long *lastPrint) {
     std::string line;
@@ -697,12 +733,12 @@ static long long emitVmLog(std::istream &in, bool *inGuest, long long *lastPrint
     while (std::getline(in, line)) {
         if (isSerialLine(line)) {
             std::string text = stripLogPrefix(line);
-            printf("%s\n", text.c_str());
+            printf("%s\n", demojibake(text).c_str());
             *inGuest = true;
             ++printed;
         } else if (!isLogPrefixed(line)) {
             if (*inGuest) {           // 串口输出的续行（客户机自己换的行）
-                printf("%s\n", line.c_str());
+                printf("%s\n", demojibake(line).c_str());
                 ++printed;
             }
         } else {
