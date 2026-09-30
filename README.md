@@ -7,13 +7,13 @@
 > ⚠️ **必须在系统自带的 HiShell 终端中运行。**
 >
 > **原因：只有 HiShell 终端在虚拟机白名单内。**
-> 虚拟机服务 `vm_manager`（SA 65621）对*每一个*请求都做调用者身份校验
-> （`VmmCommonUtils::CheckCallerIdentity`），白名单里是这几类身份：
-> HiShell HAP、LinuxFusionService(uid 5005)、hwf_service(uid 7700)、openEuler HAP。
-> 其余都是系统服务或专用应用，**能被用户敲命令的终端只有 HiShell 一个**。
+> 虚拟机服务 `vm_manager`（SA 65621）对*每一个*请求都做调用者身份校验，
+> 白名单里只放行少数系统身份（系统服务与专用 HAP），
+> **能被用户敲命令的终端只有 HiShell 一个**。
 > 因此从 MKCode / BitFun / WorkBuddy / CodeArts Agent 等第三方应用的内置终端运行，
 > 会在服务端被直接拒绝（日志 `... permission denied`），拿不到任何虚拟机能力。
-> 详见[权限模型](#权限模型)。
+> 详见[权限模型](#权限模型)；内部细节（调用者身份校验、各放行身份与 uid）
+> 见 [维护者笔记](docs/maintainer-notes.md)。
 
 本仓库构建**两个命令**，对应两条完全独立的技术栈：
 
@@ -28,7 +28,7 @@
 
 ## hvm-cli：虚拟机管理
 
-命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vminfo`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vmstat`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、`export`、`import`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`hash-name`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[开发与验证命令](#开发与验证命令日常不需要)）。
+命令覆盖：`hwf`、`info`、`list`、`vms`、`create`、`start`、`range`、`mount-cd`、`unmount-cd`、`destroy`、`pause`、`lock-guest`、`lx-ota`、`lx-snapshot`、`rgm-status`、`recover-user-data`、`autopause`、`linux-data-delete`、`rgm-image-delete`、`gallery-share`、`guest-disk-share`、`pasteboard`、`screen-lock-task`、`tablet`、`vminfo`、`stratovirt-mem`、`host-sn`、`capability`、`active-name`、`active-status`、`vmstat`、`process-exist`、`feature`、`open-euler-version`、`quick-start`、`is-installing`、`stop`、`force-stop`、`quit-by-reboot-host`、`require-big-mem`、`resolution`、`touch-mem`、`swap-2d`、`net ip|proxy|share-on|share-off|dns-on|dns-off|mode|ports|localhost-ports|proxy-status-on|proxy-status-off|proxy-auto-on|proxy-auto-off`、`share list|enable|disable|add|remove|setup`、`snapshot list|create|restore|destroy|rename`、`disk capacity|path|size|expand|delete-data`、`export`、`import`、以及开发/验证命令（`buffer`、`ctor`、`displays`、`hash-name`、`linux-path`、`perf`、`selftest`、`serial-read`、`serial-write`、`share-volumes`、`view-state`，见[维护者笔记](docs/maintainer-notes.md#7-开发与验证命令)）。
 
 > **常用：导出 / 导入虚拟机磁盘** —— 把某台虚拟机的磁盘导出成文件，或把一个镜像文件导入成一台新虚拟机，见[导出与导入虚拟机磁盘](#hvm-cli导出与导入虚拟机磁盘)。
 
@@ -96,24 +96,23 @@ CreateVm 返回 rc=0 (OK)
 > [docs/iso-install-notes.md](docs/iso-install-notes.md)。
 
 - **`CreateVm` 会顺带把虚拟机启动起来**（安装阶段就是这一次）：实测返回 rc=0 之后
-  立刻就有 `stratovirt` 进程、`vms` 里状态不再是 0，且**安装盘与扩展盘两张都挂在这一刻**
+  `vms` 里状态立刻是运行中，且**安装盘与扩展盘两张都挂在这一刻**
   —— 所以创建之后通常**不需要**再 `start`（详见 [3.1](#31-光盘怎么挂重要)）。
   用完记得停机：`./hvm-cli force-stop myvm`；
 - `--image` 是安装盘 ISO（上例就是我们自己构建的那份）。这个路径会被**自动转换**成媒体库视图
   `/storage/media/100/local/files/Docs/Download/debian-12-unattended-arm64.iso`
-  —— 它是唯一能让 `stratovirt` 真正打开光盘的形式（原因见 [api-notes 第 10 节](docs/api-notes.md)）。
-  账号 id（这里是 `100`）取自 `$USER`，多账号设备上第二个账号是 `101`；
-- **`--net nat`（或 `--net bridge`）必须在 `create` 时给** —— 网络不是磁盘里的东西，
-  而是宿主侧按 `CfgInfo` 分配的。实测：`create … --net nat` 的虚拟机会有网卡
-  （`stratovirt` 命令行里出现 `virtio-net-pci,netdev=net0` 与宿主侧 tap `WVMTap…`）；
-  而**只**把 `--net nat` 加在 `start` 上则**没有网卡**。所以省略它就拿不到网络。
-  桥接用 `--net bridge --nic <宿主物理网卡名>`（桥接时 `networkDevice` 必须为 false，
-  否则服务端会强制按 NAT 处理）。详见
-  [docs/iso-install-notes.md 第 4 节](docs/iso-install-notes.md)。
+  （这是服务端与虚拟机引擎两侧都能读到的写法，转换时会打印一行提示）。
+  账号 id（这里是 `100`）取自 `$USER`，多账号设备上第二个账号是 `101`，可用 `HVM_USER_ID` 覆盖；
+  媒体库视图的细节见 [维护者笔记](docs/maintainer-notes.md)；
+- **`--net nat`（或 `--net bridge`）必须在 `create` 时给** —— 省略它就拿不到网络：
+  网络不是磁盘里的东西，因此只把 `--net nat` 加在 `start` 上**没有网卡**，
+  实测 `create … --net nat` 的虚拟机才有网卡。桥接用 `--net bridge --nic <宿主物理网卡名>`。
   **限定**：实测通过的是 **NAT**；**桥接还没验证过** —— 此前在 `start` 上加 `--net bridge --nic …`
-  一律得到常量错误 `-151060477`，`create` 时未测；
+  一律得到常量错误 `-151060477`，`create` 时未测。
+  > 为什么必须在 `create` 时给、桥接还要满足什么条件：内部细节见
+  > [维护者笔记](docs/maintainer-notes.md)。
 - `--enhance` 是**扩展盘（enhance ISO）**，**创建时必填**且必须是 `.iso` 文件
-  （服务端校验：`enhanceFilePath` 不能为空，否则 `create vm fail, enhance file path is null`）。
+  （缺省会被服务端拒绝，报 `create vm fail, enhance file path is null`）。
   它对应客户机里的 `unattend` 槽位。**它不能与 `--image` 指向同一个文件** ——
   实测两者填同一个 ISO 会被拒：`CreateVm 返回: unknown (-16842748)`；填成两个不同文件即正常
   （本仓库的用法是安装盘填构建出来的 ISO、扩展盘始终填 `oetool.iso`）；
@@ -190,23 +189,25 @@ ANSI 控制序列也会去掉 —— 所以不用再 `strings` 一遍。
 $ strings /data/log/hwf_service/vmlog
 ```
 
-> 两者是同一个文件的两个侧面：这个文件是 `-serial redirect-to-log` 的落点，
-> 客户机的控制台文本就夹在引擎自己的日志行之间。
+> 两者是同一个文件的两个侧面：客户机的控制台文本就夹在引擎自己的日志行之间
+> （落点配置等内部细节见 [维护者笔记](docs/maintainer-notes.md)）。
 
 > 注意：`create` 本身就会启动一次（安装阶段），所以刚创建完的虚拟机已经在跑；
 > 这里的 `start` 用于**之后**的启动。挂盘规则见下一节。
 
-启动后 `stratovirt` 才真正打开光盘；**光盘能不能读，是到这一步才暴露的** ——
-可以这样确认：
+启动之后想看这台虚拟机在不在跑，用 `vms`：
 
 ```console
 $ ./hvm-cli vms myvm
 当前虚拟机: myvm
 名字                     状态     当前     磁盘镜像
 myvm                     9        是       /data/service/el0/virt_service/100/vm_manager/<hash>/myvm/img/myvm.qcow2
-
-$ pgrep -a stratovirt | grep myvm        # create 那次启动时命令行里能看到两张光盘的 file=
 ```
+
+（状态 9 = 运行中，`vminfo` 还能给出 PID。）
+
+> 光盘 / 网卡到底有没有真的挂上，属于引擎内部行为；怎么在引擎侧确认（验证配方）
+> 见 [维护者笔记](docs/maintainer-notes.md)。
 
 > 服务端可能返回 `405 (VM_IP_UNAVAILABLE)`：那只是"启动后立刻查客户机 IP 没查到"，
 > **不代表启动失败**，虚拟机通常已经跑起来了。
@@ -215,10 +216,10 @@ $ pgrep -a stratovirt | grep myvm        # create 那次启动时命令行里能
 
 挂盘发生在 **`create`**，不在 `start`：
 
-| 操作 | 光盘 | 实测 |
-|---|---|---|
-| **`create`** | 安装盘（`--image`）+ 扩展盘（`--enhance`）**两张都会挂上** | `create` 返回 rc=0 后立刻能查到 `stratovirt` 进程（状态 9、`vminfo` 给出 PID），其命令行里 `media=cdrom` 计数为 **2** |
-| **之后的任何 `start`** | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` | 对该虚拟机执行 `start --image … --enhance …`，命令行里只有 UEFI 固件、磁盘、UEFI vars，`media=cdrom` 计数为 **0** |
+| 操作 | 光盘 |
+|---|---|
+| **`create`** | 安装盘（`--image`）+ 扩展盘（`--enhance`）**两张都会挂上** |
+| **之后的任何 `start`** | **一张都不挂** —— 即使命令行里再传 `--image` / `--enhance` |
 
 也就是说：**`CreateVm` 会顺带完成一次启动**（安装阶段就是这一次），安装介质也只在这一次挂上；
 以后再启动要挂盘，用**热插拔**接口：
@@ -230,14 +231,14 @@ $ ./hvm-cli mount-cd --name myvm \
 服务端返回: 1
 ```
 
-（`服务端返回: 1` 是服务端分配的设备 id，不是错误码。实测证据：`vmlog` 里能看到
-`QMP: --> blockdev_add { node_name: "cdrom-drive1" }` 与
-`QMP: --> device_add { driver: "usb-storage" }`，也就是以 USB 存储设备热插拔进去的。）
+（`服务端返回: 1` 是服务端分配的设备 id，不是错误码。）
 
 > 两点说明：
 > 1. 因此 `create` 之后**通常不需要再 `start`** —— 它已经在跑（安装阶段）；
-> 2. "`CreateVm` 为什么会启动"（推测与内部的 `InstallVm` / 快速启动流程有关）
->    **尚未确认**，这里只记录实测到的行为。
+> 2. "`CreateVm` 为什么会启动"**尚未确认**，这里只记录实测到的行为。
+
+> 实测证据（两张盘怎么确认挂上、热插拔命令、`CreateVm` 为什么会启动的线索）见
+> [维护者笔记](docs/maintainer-notes.md)。
 
 ### 4. 暂停 / 恢复
 
@@ -256,10 +257,12 @@ $ ./hvm-cli force-stop myvm        # 强制关机（不需要客户机配合）
 
 两者差别**很关键**（实测）：
 
-| 命令 | 服务端 API | 生效条件 |
-|---|---|---|
-| `stop` | `StopVm(name, clean)` | **需要客户机里的 GuestAgent 在线** —— 它本质是"请客户机自己关机"。客户机没起来（例如停在 GRUB）会返回 `405`，服务端日志是 `HostService has lost connection with GuestAgentService` / `system power request calling failed` |
-| `force-stop` | `ForceStopVm(name)` | 直接关掉，实测任何状态下都能停（我们自己那台停在 GRUB 时也只有它能停） |
+| 命令 | 生效条件 |
+|---|---|
+| `stop` | **需要客户机里的 GuestAgent 在线** —— 它本质是"请客户机自己关机"。客户机没起来（例如停在 GRUB）会返回 `405` |
+| `force-stop` | 直接关掉，实测任何状态下都能停（我们自己那台停在 GRUB 时也只有它能停） |
+
+> 服务端 API 名与日志线索见 [维护者笔记](docs/maintainer-notes.md)。
 
 ### 6. 删除（连磁盘一起删）
 
@@ -294,46 +297,37 @@ $ ./hvm-cli --vm myvm net ip              # 客户机 IPv4（需客户机已联�
 安装过程中的客户机文本输出（GRUB 菜单、控制台日志）见
 [「3. 启动」](#3-启动开机)一节的 `vmlog` / `vmlog -f` 用法。
 
-### 参数规则（逆向自服务端校验，实测确认）
+### 参数规则（实测确认）
 
 | 参数 | 单位 | 约束 |
 |---|---|---|
-| `--cpu` | 个数 | 必须在 `GetVmAvailableCpuNumRange` 返回的区间内（本机 6..8） |
-| `--mem` | **GB** | 必须在 `GetVmAvailableMemorySizeRange` 区间内（本机 6..18） |
-| `--disk` / `--disk-gb` | MB / GB | 服务端要求 `>= 0x10000`（64 GB）且不超过宿主磁盘 |
-| `--bios` | 路径 | 必须存在且可读（服务端 `access(R_OK)`）；如 `/system/opt/virt_service/virtualized_hwf/stratovirt-vars` |
-| `--image` | 路径 | 必须存在且**服务端进程**可读，且是 ISO 镜像（`DetectIsoType`） |
-| `--enhance` | 路径 | 必须存在且可读，扩展名必须是 `.iso`（`CheckEnhanceFilePath`）；缺省会导致 `create vm fail, enhance file path is null` |
+| `--cpu` | 个数 | 本机 6..8（见 `range`） |
+| `--mem` | **GB** | 本机 6..18（见 `range`），且不能为 0 |
+| `--disk` / `--disk-gb` | MB / GB | 至少 64 GB，且不超过宿主磁盘 |
+| `--bios` | 路径 | 必须存在且可读；如 `/system/opt/virt_service/virtualized_hwf/stratovirt-vars` |
+| `--image` | 路径 | 必须存在且**服务端进程**可读，且是 ISO 镜像 |
+| `--enhance` | 路径 | 必须存在且可读，扩展名必须是 `.iso`；缺省会导致 `create vm fail, enhance file path is null` |
 
-#### 路径必须写成「媒体库视图」（唯一对两个域都可读的形式）
+> 服务端校验的内幕（各校验函数的名称与行为、实测日志）见
+> [维护者笔记](docs/maintainer-notes.md)。
 
-实测三种写法里只有一种可用（`hvm-cli` 会自动转换）：
+#### 路径必须写成「媒体库视图」（`hvm-cli` 会自动转换）
 
-| 写法 | vm_manager 能读 | **stratovirt 能读**（挂光盘要靠它） |
-|---|---|---|
-| `/storage/Users/currentUser/Download/x.iso` | ✗ 它的命名空间里没有这个挂载 | — |
-| `/data/service/el2/100/hmdfs/account/files/Docs/Download/x.iso`（hmdfs 真实路径） | ✓ | ✗ `Permission denied` |
-| **`/storage/media/100/local/files/Docs/Download/x.iso`（媒体库视图）** | ✓ | ✓ |
-
-这个写法是从**正在安装 Windows 的第三方应用虚拟机**的命令行里抓到的：
+`--image` / `--enhance` 的路径要写成**媒体库视图**形式：
 
 ```
-if=none,id=disk,format=raw,media=cdrom,file=/storage/media/100/local/files/Docs/Download/<bundle>/Win11_....iso
-if=none,id=unattend,format=raw,media=cdrom,readonly=true,file=/storage/media/100/local/files/Docs/Download/<bundle>/server.iso
+/storage/media/<账号 id>/local/files/Docs/Download/x.iso
 ```
 
-即：HAP 把 ISO 放在用户下载目录后，传给服务端的是**媒体库视图**路径（服务端字符串里
-`^/storage/media/\d+/local/files/Docs/` 那条正则正是它的白名单）。
-`hvm-cli` 现在会自动把 `/storage/Users/currentUser/...` 或
+`hvm-cli` 会自动把 `/storage/Users/currentUser/...` 或
 `file://docs/storage/Users/currentUser/...` 转换成该形式。
 
-路径里的数字是 **OS 账号 id**，本机 HiShell 终端里就是环境变量 **`$USER`（=100）**。
-工具优先直接读 `$USER`（要求纯数字），拿不到时回落到 `uid / 200000` 推导
-（HiShell 的 20020085 → 100；第二账号下的应用 202xxxxx → 101），
-也可用 `HVM_USER_ID` 显式覆盖；发生转换时会打印一行提示，例如
+路径里的数字是 **OS 账号 id**，本机 HiShell 终端里就是环境变量 **`$USER`（=100）**；
+多账号设备上第二个账号是 `101`，也可用 `HVM_USER_ID` 显式覆盖（便于引用别的账号视图下的文件）。
+发生转换时会打印一行提示，例如
 `（账号 id=100，取自 $USER（回落到 uid 20020085 / 200000））`。
 
-磁盘**不需要**自己准备 qcow2 —— 框架会按 `CfgInfo.diskSize` 自行创建：
+磁盘**不需要**自己准备 qcow2 —— 框架会按 `--disk-gb` 自行创建：
 
 ```
 $ ./hvm-cli --vm win11 disk path
@@ -344,11 +338,12 @@ $ ./hvm-cli --vm win11 disk path
 > 框架自动生成磁盘 `.../vm_manager/<hash>/<vm>/img/vm.qcow2`（稀疏，随写增长）。
 
 > ✅ **安装介质能挂上**（实测）：ISO 路径写成上面那种**媒体库视图**即可 ——
-> `CreateVm` 返回 0（它顺带完成一次启动）、那次启动里安装盘与扩展盘两张都出现在 `stratovirt` 命令行里、
+> `CreateVm` 返回 0（它顺带完成一次启动），那次启动里安装盘与扩展盘两张都挂上，
 > `vmlog` 里 `Permission denied` 计数为 0。
-> 另外两种写法各有原因：用户视图路径在服务进程的命名空间里不存在（`realpath` 失败），
-> hmdfs 真实路径则是 `ohsw_stratovirt` 域读不了（SELinux）。
-> 详见 `docs/api-notes.md` 第 10 节。
+
+> 内部细节：为什么只有这一种写法可用（服务端与虚拟机引擎两侧的可读性、
+> 路径白名单、抓到的第三方虚拟机命令行、账号 id 的推导规则、逐条验证配方）见
+> [维护者笔记](docs/maintainer-notes.md) 以及 [`api-notes.md` 第 10 节](docs/api-notes.md)。
 
 ## hvm-cli：导出与导入虚拟机磁盘
 
@@ -408,7 +403,7 @@ $ ./hvm-cli vmlog
 | 看到自己虚拟机的**画面**、给它**发按键** | ❌ 画面要合成进"应用窗口"，而窗口只有 UIAbility 能创建 |
 | 自己写 HAP 绕过上面两条 | ❌ appIdentifier 不在白名单 |
 | 让系统四指右滑进自己虚拟机的全屏 | ❌ 同上（系统合成的对象是应用窗口） |
-| 读客户机的**文本**控制台（GRUB、安装器输出） | ✅ 可以（`-serial redirect-to-log` → `/data/log/hwf_service/vmlog`；用 `./hvm-cli vmlog` 读；引擎自身日志用 `strings` 读同一文件） |
+| 读客户机的**文本**控制台（GRUB、安装器输出） | ✅ 可以（客户机串口落在 `/data/log/hwf_service/vmlog`；用 `./hvm-cli vmlog` 读；引擎自身日志用 `strings` 读同一文件） |
 | 多台虚拟机并存 / 同时只运行一台 | ✅ / ⛔ 服务端限制 |
 
 > 因此"交互式装系统 + 看画面"只能用**厂商合作应用的界面**（OSEasy / Sanway）；
@@ -416,10 +411,8 @@ $ ./hvm-cli vmlog
 
 ## 权限模型
 
-`vm_manager` 对每个请求做调用者校验（`VmmCommonUtils::CheckCallerIdentity`），
-白名单里除 LinuxFusionService（uid 5005）、hwf_service（uid 7700）、openEuler HAP 外，
-**还单独放行 HiShell HAP**（服务端日志：`isLinuxFusionService:%d, isHiShellHap:%d,
-isOpenEulerHap:%d`）。因此从系统自带终端 **HiShell** 启动的进程可以直接调用：
+`vm_manager` 对每个请求做调用者校验：白名单里只放行少数系统身份
+（系统服务与专用 HAP，外加系统自带的 HiShell 终端），因此从 **HiShell** 启动的进程可以直接调用：
 
 > 不 root、不做 HAP，直接调用系统自带的库，权限由**进程身份**决定。
 
@@ -428,6 +421,9 @@ isOpenEulerHap:%d`）。因此从系统自带终端 **HiShell** 启动的进程�
 
 **结论：本工具只能在系统自带的 HiShell 终端里运行 —— 因为白名单里能被用户使用的
 终端只有它一个**（其余放行身份都是系统服务或专用 HAP，用户无法在其中开终端）。
+
+> 内部细节（调用者校验、各放行身份与 uid、服务端日志格式）见
+> [维护者笔记](docs/maintainer-notes.md)。
 
 ## 构建
 
@@ -482,71 +478,15 @@ sudo scripts/build-deb12min.sh /tmp/out.qcow2     100G btrfs   # 根用 btrfs，
 
 虚拟大小默认 8 GiB；之后需要更大空间可用 `./hvm-cli --vm <名字> disk expand <GB>` 扩容。
 
-## 调试
 
-系统自带的 lldb-server 在应用沙箱里 `ptrace` 会被拒。可改用**应用商店里的 CodeArts IDE**（`com.huawei.codearts`，
-注意与白名单一节提到的 `com.huawei.codearts.agent` 是两个应用）自带的 `huawei-debug-lldb-server`：它躺在 CodeArts IDE 自己的沙箱里，
-要在 **CodeArts IDE 的终端**里拷出来：
+## 维护者文档
 
-```console
-$ mkdir -p ~/.local/bin
-$ cp /data/storage/el2/base/files/huawei-debug-lldb-server ~/.local/bin/
-```
+只对维护者 / 逆向工作有意义的内容已从本 README 移出：
 
-之后在 HiShell 终端里就能用（脚本已封装）：
-
-```console
-$ scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
-```
-
-进程由 lldb-server 预先拉起并停在动态链接器入口，所以下完断点用 `continue`
-恢复，不要用 `run`。
-
-## 开发与验证命令（日常不需要）
-
-这些是逆向与自检用的，用户日常操作不需要它们：
-
-| 命令 | 用途 |
+| 文档 | 内容 |
 |---|---|
-| `ctor [选项]` | 只构造 `CfgInfo` 入参对象并打印字段布局，**不调服务端**（验证构造配方） |
-| `view-state <0\|1\|2>` / `displays <id>` | 上报 `HapViewState` / 显示器 id 列表（研究视图机制用） |
-| `serial-read` / `serial-write` | 读写客户机通道（`ChannelInfo`） |
-| `sha256 <文件> [线程数]` | 内置 SHA-256：多线程预读 + ARMv8 加密指令（实测 ~1.8 GB/s），也用于 `import` 自动算摘要 |
-| `hash-name` | 迁移用的 Hash 名（`GetHashName`；未发起过迁移时为空串） |
-| `selftest` | 两条通路的加载自检（`hvm-cli selftest` / `openeuler selftest`） |
-| `share-volumes` | 列出全部共享卷（`GetAllSharedVolume` 的返回元素类型未还原，命令保留但直接报错） |
-| `linux-path <宿主路径..>` | 宿主路径 → 客户机内路径；服务端只允许 LinuxFusion 服务调用，HiShell 身份会被拒 |
-| `buffer avail\|low <字节>` | 上报内存阈值（语义是"应用上报"，不是查询，慎用） |
-| `perf <a> <b>` / `perf-ex …` | 性能请求；服务端返回 `permission denied` |
-| `make symcheck` | 核对生成的 mangled 名与设备符号快照是否一致 |
+| [`docs/maintainer-notes.md`](docs/maintainer-notes.md) | README 移出的内部细节：服务端参数校验内幕、网络字段分配、光盘挂载引擎内幕、媒体库视图为什么只有一种写法、验证配方、**调试（lldb）**、开发与验证命令、目录结构、实现状态 |
+| [`docs/api-notes.md`](docs/api-notes.md) | 逆向笔记 §1–§14：白名单、ABI 陷阱、线上格式、安装介质路径、通道、能力边界、接口覆盖 |
+| [`docs/iso-install-notes.md`](docs/iso-install-notes.md) | 自建 squashfs 安装 ISO 的设计与构建踩坑 |
+| [`include/README.md`](include/README.md) | 逆向还原的公共头文件 |
 
-## 目录结构
-
-| 路径 | 说明 |
-|---|---|
-| `src/main.cpp` | `hvm-cli` 命令入口（含媒体库视图路径转换） |
-| `src/hvm_client.h/.cpp` | vm_manager 客户端封装（dlopen + dlsym → 类型化接口，已接 87/120 个方法） |
-| `src/cfginfo.h/.cpp` | 手工构造私有类：`CfgInfo` / `MigrationOptions` / `ChannelInfo` / `PortInfoList` |
-| `src/fusion_pty.h/.cpp` | LinuxFusion PTY 通道封装（`openeuler` 的底层） |
-| `src/openeuler_main.cpp` | `openeuler` 命令入口 |
-| `include/` | **逆向还原的公共头文件**（可直接 `#include` 调用私有库），见 [`include/README.md`](include/README.md) |
-| `docs/api-notes.md` | 逆向笔记 §1–§14：白名单、ABI 陷阱、线上格式、安装介质路径、通道、能力边界、接口覆盖 |
-| `docs/abi/vm_manager_client_wrapper.symbols.txt` | 设备导出符号快照（121 个方法与 mangled 名，生成器的核对基准） |
-| `scripts/gen-wrapper-api.py` | 生成 `vm_manager_kits.h` 与 `.syms.h`；借 ABI shim 让**编译器**产出 mangled 名并与设备核对 |
-| `scripts/abi-shim/__config_site` | 强制 `_LIBCPP_ABI_NAMESPACE __h`，使本机 clang 产出的符号名与设备库一致 |
-| `scripts/build-deb12min.sh` | 从零构建最小 Debian 12 arm64 qcow2（可导入、可发布） |
-| `scripts/hwdbg.sh` | 沙箱内可用的 lldb 调试封装（CodeArts IDE 提供的 lldb-server） |
-| `scripts/check-no-binary.sh` | 提交前检查：仓库内不得有二进制文件 |
-
-## 实现状态
-
-- [x] `hvm-cli`：状态/能力/电源/快照/共享目录/网络/磁盘/显示/内存
-- [x] `hvm-cli`：**创建 / 启动 / 销毁虚拟机**（`CfgInfo` 手工构造，实测 `CreateVm` 返回 0）
-- [x] `hvm-cli`：安装盘与扩展盘挂载 + 运行中热插拔（`mount-cd` / `unmount-cd`）。实测：**`create` 那次启动**两张盘都会挂上，之后的 `start` 不再挂盘，改用 `mount-cd`；ISO 路径会自动转成媒体库视图
-- [x] `hvm-cli`：主机 ↔ 客户机通道（`ChannelInfo` + `Send/RecvDataFromVm`）
-- [x] `hvm-cli`：LinuxFusion / RGM 运维面（`pause`/`resume`/剪贴板/图库/客户机磁盘共享/
-      自动暂停之外的 23 个 kit 接口；kit 120 个方法已接 **78** 个）
-- [x] `openeuler`：`exec` / `shell` / 共享目录 / 镜像安装
-- [ ] `DeviceInfo`(0x260) 内部字段逐个还原（各 `Unwrap*Device`）
-- [ ] 事件回调（`RegisterVmStatusCallback` / `IVmEventListener` 等）
-- [ ] 自建虚拟机的画面与键鼠 —— **架构上不可达**，见[能力边界](#能力边界)
