@@ -1,6 +1,7 @@
 # hvm-cli
 
 鸿蒙 PC（HarmonyOS PC）**虚拟机与 Linux 兼容环境控制工具**，纯 C++ 实现。
+代码和文档均由DeepSeek Harness中的DeepSeek V4.1 Flash等模型生成。
 
 **不需要 root、不需要 HAP** —— 全部通过 `dlopen` 直接调用系统自带库。
 
