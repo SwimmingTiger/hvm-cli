@@ -1302,22 +1302,21 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         int rc = (act == "create") ? c.createVm(name, image, cfg.raw())
                                    : c.startVm(name, cfg.raw());
         if (rc != 0 && rc != 1) {  // 1 也可能表示“已启动”之类，先按错误码如实报
-            // 失败时顺带看一眼框架的当前虚拟机：若不是本工具建的且有 PID，说明有别的
-            // 虚拟机程序在跑。只陈述这个事实，不替失败推断因果。
+            // ★ 顺序：先报错，再补探测结果 —— 探测只发生在**失败之后**，成功路径完全不探测。
+            // （上一版把提示写在 fail() 之前，终端里就变成“先提示后报错”，看着像执行前探测。）
+            const int failed = fail("vm " + act, rc,
+                                    std::string(act == "create" ? "CreateVm" : "StartVm") +
+                                        " 返回: " + ohos_vm_error_name(rc) + " (" +
+                                        std::to_string(rc) + ")");
             std::string actVm;
             if (c.activeVmName(actVm) == 0 && !actVm.empty()) {
                 uint32_t ddr = 0, pid = 0;
                 const std::vector<std::string> reg = registryLoad();
                 const bool ours = std::find(reg.begin(), reg.end(), actVm) != reg.end();
                 if (c.getVmInfo(ddr, pid) == 0 && pid > 0 && !ours)
-                    fprintf(stderr,
-                            "提示：框架当前虚拟机为 %s（PID %u），它不在本工具清单里，\n"
-                            "      即有其他虚拟机程序正在运行。%s 失败时可结合这一点排查。\n",
-                            actVm.c_str(), pid, act.c_str());
+                    fprintf(stderr, "已有其他虚拟机在运行: %s（PID %u）\n", actVm.c_str(), pid);
             }
-            return fail("vm " + act, rc,
-                        std::string(act == "create" ? "CreateVm" : "StartVm") + " 返回: " +
-                            ohos_vm_error_name(rc) + " (" + std::to_string(rc) + ")");
+            return failed;
         }
         if (g_json) {
             Json j("vm " + act);
