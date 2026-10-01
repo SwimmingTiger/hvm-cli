@@ -848,6 +848,11 @@ int printVmTable(Client &c, const std::string &cmd,
         uint32_t ddrGb = 0, pid = 0;
         if (c.getVmInfo(ddrGb, pid) == 0 && pid > 0) activePid = static_cast<long>(pid);
     }
+    // 本地清单：区分"本工具建的"与"别的虚拟机程序的"（循环里不要再 load）
+    const std::vector<std::string> regAll = registryLoad();
+    const auto isOurs = [&regAll](const std::string &n) {
+        return std::find(regAll.begin(), regAll.end(), n) != regAll.end();
+    };
     printf("%s %s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
            padTo("当前", 8).c_str(), padTo("进程", 10).c_str(), "磁盘镜像");
     std::vector<std::string> stale;
@@ -860,14 +865,16 @@ int printVmTable(Client &c, const std::string &cmd,
         //   但它其实是活着的。铁证是框架自己报的 PID —— 由 GetVmInfo 给出（只对当前虚拟机有效）。
         const bool isActive = (n == active);
         const long pid = isActive ? activePid : -1;
-        if (!isActive && path.empty()) stale.push_back(n);
-        const std::string proc = (pid > 0) ? ("运行中/" + std::to_string(pid))
-                                           : (isActive ? "无" : "—");
+        if (isOurs(n) && !isActive && path.empty()) stale.push_back(n);
+        // 进程列只打 PID —— 有 PID 本身就是"在运行"，不必再写"运行中"三个字。
+        const std::string proc = (pid > 0) ? std::to_string(pid) : "";
+        // 磁盘列：不是本工具建的虚拟机，框架不会把磁盘路径给我们 —— 那是"无法获取"，
+        // 不能写成"无"（"无"会被读成"不存在"）。
+        const std::string disk = !path.empty() ? path : (isOurs(n) ? "(无)" : "(无法获取)");
         printf("%s %s %s %s %s\n", padTo(n, 24).c_str(),
                padTo(std::to_string(st), 8).c_str(),
                padTo(n == active ? "是" : "否", 8).c_str(),
-               padTo(proc, 10).c_str(),
-               path.empty() ? "(无)" : path.c_str());
+               padTo(proc, 10).c_str(), disk.c_str());
     }
     if (!active.empty()) {
         // 注意：不能用 names 判断"是否本工具建的" —— 探测逻辑会把当前虚拟机也加进 names。
@@ -1294,10 +1301,24 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         }
         int rc = (act == "create") ? c.createVm(name, image, cfg.raw())
                                    : c.startVm(name, cfg.raw());
-        if (rc != 0 && rc != 1)  // 1 也可能表示“已启动”之类，先按错误码如实报
+        if (rc != 0 && rc != 1) {  // 1 也可能表示“已启动”之类，先按错误码如实报
+            // 失败时顺带看一眼框架的当前虚拟机：若不是本工具建的且有 PID，说明有别的
+            // 虚拟机程序在跑。只陈述这个事实，不替失败推断因果。
+            std::string actVm;
+            if (c.activeVmName(actVm) == 0 && !actVm.empty()) {
+                uint32_t ddr = 0, pid = 0;
+                const std::vector<std::string> reg = registryLoad();
+                const bool ours = std::find(reg.begin(), reg.end(), actVm) != reg.end();
+                if (c.getVmInfo(ddr, pid) == 0 && pid > 0 && !ours)
+                    fprintf(stderr,
+                            "提示：框架当前虚拟机为 %s（PID %u），它不在本工具清单里，\n"
+                            "      即有其他虚拟机程序正在运行。%s 失败时可结合这一点排查。\n",
+                            actVm.c_str(), pid, act.c_str());
+            }
             return fail("vm " + act, rc,
                         std::string(act == "create" ? "CreateVm" : "StartVm") + " 返回: " +
                             ohos_vm_error_name(rc) + " (" + std::to_string(rc) + ")");
+        }
         if (g_json) {
             Json j("vm " + act);
             j.str("name", name).num("rc", rc);
