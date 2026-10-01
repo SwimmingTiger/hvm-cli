@@ -117,7 +117,7 @@ apt-get install -y --no-install-recommends \
     linux-image-arm64 grub-efi-arm64 openssh-server \
     ca-certificates iproute2 systemd-resolved systemd-sysv \
     live-boot live-config squashfs-tools e2fsprogs dosfstools gdisk parted \
-    zstd xz-utils bzip2 lz4
+    zstd xz-utils bzip2 lz4 python3
 if [ -x /usr/sbin/update-initramfs.disabled-for-install ]; then
     mv /usr/sbin/update-initramfs.disabled-for-install /usr/sbin/update-initramfs
 fi
@@ -338,6 +338,34 @@ chroot "$ROOTFS" /bin/bash -eux <<'CHROOT'
 systemctl enable systemd-networkd systemd-resolved ssh
 systemctl enable serial-getty@ttyAMA0
 systemctl enable hvm-install.service
+
+# ---------------------------------------------------------------- 串口 guest-agent
+# 框架在 create 那一刻就会连上 winbox_serial0（客户机侧 /dev/vport2p1）并等客户机握手，
+# 握手成功后才会调用客户机（存活检查 methodID=27 → 状态变 1；取 IP methodID=40）。
+# 协议、帧格式、方法号见 docs/serial-agent-protocol.md。
+if [ -f /work/hvm-serial-agent.py ]; then
+    install -m 0755 /work/hvm-serial-agent.py "$ROOTFS/usr/local/sbin/hvm-serial-agent.py"
+    cat > "$ROOTFS/etc/systemd/system/hvm-serial-agent.service" <<'AGENTUNIT'
+[Unit]
+Description=HVM serial guest agent (winbox_serial0 <-> /dev/vport2p1)
+After=local-fs.target
+DefaultDependencies=no
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 /usr/local/sbin/hvm-serial-agent.py
+Restart=always
+RestartSec=2
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target sysinit.target
+AGENTUNIT
+    systemctl enable hvm-serial-agent.service || true
+    LOG "已安装串口 guest-agent（开机自启）"
+else
+    LOG "警告：/work/hvm-serial-agent.py 不存在，串口 agent 未安装"
+fi
 apt-get clean
 rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 CHROOT
