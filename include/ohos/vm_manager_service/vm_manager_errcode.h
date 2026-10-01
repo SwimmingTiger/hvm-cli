@@ -36,6 +36,13 @@
 /** 405：无虚拟机时调用 GetVmIpv4Address。 */
 #define OHOS_VM_ERR_VM_IP_UNAVAILABLE 405
 
+/** 建虚拟机时前置校验未通过（实测：框架的当前虚拟机属于别的虚拟机程序且正在运行时得到此码）。
+ *  来源：VmAssistantManager::CreateVm 里 CheckBeforeStartVm 的返回值。 */
+#define OHOS_VM_ERR_CREATE_CHECK_FAILED (static_cast<std::int32_t>(0xFEFF000Au))
+/** 启动虚拟机时前置校验未通过（实测：同上场景下 start 得到的是 0xFEFF0010）。
+ *  来源：VmAssistantManager::StartVm 里 CheckBeforeStartVm 的返回值。 */
+#define OHOS_VM_ERR_START_CHECK_FAILED (static_cast<std::int32_t>(0xFEFF0010u))
+
 /**
  * 0xF8FF000C：无虚拟机时调用 GetSnapshotList。
  * 属 OHOS 统一错误码风格（高位段标识模块），此处按有符号 32 位取值。
@@ -64,6 +71,12 @@ inline const char *ErrorName(std::int32_t code) {
             return "INVALID_VM_NAME";
         case OHOS_VM_ERR_CFG_INFO_UNAVAILABLE:
             return "CFG_INFO_UNAVAILABLE";
+        case OHOS_VM_ERR_CREATE_CHECK_FAILED:
+            // 实测：框架当前虚拟机属于别的虚拟机程序且正在运行时，create 得到这个码。
+            return "VM_CREATE_CHECK_FAILED";
+        case OHOS_VM_ERR_START_CHECK_FAILED:
+            // 实测：同上场景下 start 得到这个码。
+            return "VM_START_CHECK_FAILED";
         case OHOS_VM_ERR_VM_IP_UNAVAILABLE:
             return "VM_IP_UNAVAILABLE";
         case OHOS_VM_ERR_SNAPSHOT_UNAVAILABLE:
@@ -81,8 +94,10 @@ inline const char *ErrorName(std::int32_t code) {
 }  // namespace OHOS
 
 /** C 风格的便捷封装。 */
+
 static inline const char *ohos_vm_error_name(std::int32_t code) {
     return OHOS::VmManagerService::ErrorName(code);
 }
+
 
 #endif /* OHOS_VM_MANAGER_SERVICE_VM_MANAGER_ERRCODE_H */
