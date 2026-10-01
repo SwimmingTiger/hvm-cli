@@ -339,6 +339,10 @@ systemctl enable systemd-networkd systemd-resolved ssh
 systemctl enable serial-getty@ttyAMA0
 systemctl enable hvm-install.service
 
+apt-get clean
+rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+CHROOT
+
 # ---------------------------------------------------------------- 串口 guest-agent
 # 框架在 create 那一刻就会连上 winbox_serial0（客户机侧 /dev/vport2p1）并等客户机握手，
 # 握手成功后才会调用客户机（存活检查 methodID=27 → 状态变 1；取 IP methodID=40）。
@@ -366,9 +370,6 @@ AGENTUNIT
 else
     LOG "警告：/work/hvm-serial-agent.py 不存在，串口 agent 未安装"
 fi
-apt-get clean
-rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-CHROOT
 cleanup; trap - EXIT
 
 # ---------------------------------------------------------------- 4) squashfs + 内核
