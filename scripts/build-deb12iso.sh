@@ -365,7 +365,14 @@ StandardOutput=journal+console
 [Install]
 WantedBy=multi-user.target sysinit.target
 AGENTUNIT
-    systemctl enable hvm-serial-agent.service || true
+    # 注意：这段在 chroot【外面】执行，容器里没有 systemctl，
+    # 所以用等价的手工软链代替 `systemctl enable`（enable 就是往 .wants/ 里放软链）
+    for tgt in multi-user.target sysinit.target; do
+        mkdir -p "$ROOTFS/etc/systemd/system/$tgt.wants"
+        ln -sf /etc/systemd/system/hvm-serial-agent.service \
+               "$ROOTFS/etc/systemd/system/$tgt.wants/hvm-serial-agent.service"
+    done
+    LOG "已启用 hvm-serial-agent.service（手工软链）"
     LOG "已安装串口 guest-agent（开机自启）"
 else
     LOG "警告：/work/hvm-serial-agent.py 不存在，串口 agent 未安装"

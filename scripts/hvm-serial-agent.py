@@ -36,8 +36,19 @@ CLIENT_NAME = os.environ.get("HVM_AGENT_NAME", "debian-guest")
 CONNECTION_MODE = os.environ.get("HVM_AGENT_MODE", "1")
 GUEST_IP = os.environ.get("HVM_AGENT_IP", "172.16.100.2")
 
-MT_CALL = 0          # 发送 Call 用的消息类型（0..3，待实测确认，可用环境变量覆盖）
-MT_RESULT = 1        # 发送 Result 用的消息类型
+# MessageType（取自 LinkBase::SendMessage 各调用点的 mov w1, #N）：
+#   1 = Call（IService::CallMethodSync/CallMethodAsync 都用它）
+#   2 = Result（DispatchAndReply 回应 Call 用它）
+#   3 = EstablishEventChannel
+MT_CALL = 1
+MT_RESULT = 2
+MT_HANDSHAKE = 3     # 串口连接后第一帧（裸 Handshake）用的类型，见 HandleConnectSerial
+# 握手用的 methodID：InitService 里只注册了 0 和 31，故做成环境变量便于就地迭代
+HS_ID = int(os.environ.get("HVM_AGENT_HS_ID", "1"))
+# 第一条消息 = Call{methodID=1}，对应 GuestManager::BootComplete()（无参数！）
+# 注册表（GuestManager::RegisterGuestMessages 反汇编）：
+#   1 BootComplete / 3 GuestShutdown / 5 SessionChange / 6..25 其它
+HS_PARAMS = os.environ.get("HVM_AGENT_HS_PARAMS", "")   # "" = 空参数，符合 BootComplete() 签名
 
 
 def log(msg):
@@ -176,11 +187,14 @@ def dec_call(buf):
 
 
 # ---------------------------------------------------------------- 主循环
-def read_exact(fd, n, timeout=30.0):
+def read_exact(fd, n, timeout=None):
+    """读满 n 字节。timeout=None 表示【一直等】—— 这点很关键：
+    主机可能长时间不发东西，绝不能因为"暂时没有数据"就关闭端口重开，
+    否则 virtio-serial 端口会反复下线/上线，主机拿不到稳定窗口。"""
     got = bytearray()
     t0 = time.time()
     while len(got) < n:
-        if time.time() - t0 > timeout:
+        if timeout is not None and time.time() - t0 > timeout:
             return None
         r, _, _ = select.select([fd], [], [], 1.0)
         if not r:
@@ -217,8 +231,11 @@ def main():
             continue
         log("已打开 %s，发送握手" % PORT)
         try:
-            os.write(fd, frame(enc_call(1, 0, enc_handshake()), MT_CALL))
-            log("握手已发出 methodID=0")
+            # ★ 关键：串口第一帧是【裸的 link::Handshake】，不套 Call 信封！
+            # 依据：Service::HandleConnectSerial 先构造 Handshake，再 ReceiveMessage 后
+            # 直接 ParseFromArray 到该 Handshake 对象；类型用它构造时用的 3。
+            os.write(fd, frame(enc_handshake(), MT_HANDSHAKE))
+            log("握手已发出 methodID=%d" % HS_ID)
         except OSError as e:
             log("握手发送失败：%s" % e)
             os.close(fd)
