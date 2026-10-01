@@ -4,6 +4,11 @@
 // 不需要 root、不需要 HAP。
 #include <cstdint>
 #include <cstdio>
+#include <dirent.h>
+#include <fcntl.h>
+#include <cstdlib>
+#include <cctype>
+#include <fstream>
 #include <cstdlib>
 #include <unistd.h>   // getuid：用 uid/200000 推导 OS 账号 id
 #include <algorithm>   // sort/unique/remove/find（本地虚拟机清单）
@@ -21,6 +26,7 @@
 #include "hvm_client.h"
 #include "ohos/vm_manager_service/vm_manager_errcode.h"
 #include "sha256.h"
+
 
 namespace {
 
@@ -824,22 +830,55 @@ int printVmTable(Client &c, const std::string &cmd,
     }
     printf("当前虚拟机: %s\n", active.empty() ? "(无)" : active.c_str());
     if (names.empty()) {
-        printf("（没有可显示的虚拟机：本地清单为空，也没探测到框架自带的名字）\n");
+        if (!active.empty()) {
+            uint32_t dg = 0, pd = 0;
+            const bool alive = (c.getVmInfo(dg, pd) == 0 && pd > 0);
+            printf("服务端的「当前虚拟机」是 %s，它不在本工具的清单里：%s\n", active.c_str(),
+                   alive ? "【框架为它报告了进程 PID，说明有其他虚拟机程序正在使用 vm_manager】"
+                         : "【框架没有为它报告进程，看起来只是遗留记录】");
+        } else {
+            printf("（没有可显示的虚拟机：本地清单为空，也没探测到框架自带的名字）\n");
+        }
         return 0;
     }
-    printf("%s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
-           padTo("当前", 8).c_str(), "磁盘镜像");
+    // 当前虚拟机的 PID：GetVmInfo 是框架 API，能直接给出进程号 —— 这是唯一可靠的"活着"证据。
+    // （不要试图读 /proc/<pid>/cmdline：设备上权限不足，实测 errno=13。）
+    long activePid = -1;
+    if (!active.empty()) {
+        uint32_t ddrGb = 0, pid = 0;
+        if (c.getVmInfo(ddrGb, pid) == 0 && pid > 0) activePid = static_cast<long>(pid);
+    }
+    printf("%s %s %s %s %s\n", padTo("名字", 24).c_str(), padTo("状态", 8).c_str(),
+           padTo("当前", 8).c_str(), padTo("进程", 10).c_str(), "磁盘镜像");
     std::vector<std::string> stale;
     for (const auto &n : names) {
         int st = 0;
         c.vmStatus(n, st);
         std::string path;
         c.diskImagePath(n, path);
-        if (path.empty()) stale.push_back(n);   // 没有磁盘 = 服务端已不存在（已销毁）
-        printf("%s %s %s %s\n", padTo(n, 24).c_str(),
+        // ★ 判断"是否真的不存在"不能只看磁盘：别的应用的虚拟机，框架不给磁盘路径（空），
+        //   但它其实是活着的。铁证是框架自己报的 PID —— 由 GetVmInfo 给出（只对当前虚拟机有效）。
+        const bool isActive = (n == active);
+        const long pid = isActive ? activePid : -1;
+        if (!isActive && path.empty()) stale.push_back(n);
+        const std::string proc = (pid > 0) ? ("运行中/" + std::to_string(pid))
+                                           : (isActive ? "无" : "—");
+        printf("%s %s %s %s %s\n", padTo(n, 24).c_str(),
                padTo(std::to_string(st), 8).c_str(),
                padTo(n == active ? "是" : "否", 8).c_str(),
-               path.empty() ? "(无，已失效)" : path.c_str());
+               padTo(proc, 10).c_str(),
+               path.empty() ? "(无)" : path.c_str());
+    }
+    if (!active.empty()) {
+        // 注意：不能用 names 判断"是否本工具建的" —— 探测逻辑会把当前虚拟机也加进 names。
+        // 真正的判据是【本地清单文件】。
+        const std::vector<std::string> regForActive = registryLoad();
+        const bool inReg = std::find(regForActive.begin(), regForActive.end(), active)
+                           != regForActive.end();
+        if (!inReg && activePid > 0)
+            printf("通知：服务端的「当前虚拟机」%s 不在本工具清单里，但框架为它报告了进程 PID %ld\n"
+                   "      —— 说明有其他虚拟机程序正在运行，并占用了 vm_manager。\n",
+                   active.c_str(), activePid);
     }
     if (!stale.empty()) {
         // 只有**确实记在本地清单里**的条目，才该提示"可以从清单删掉"；
@@ -863,13 +902,12 @@ int printVmTable(Client &c, const std::string &cmd,
                    "      清单文件是纯文本，可直接删掉这些名字：%s\n",
                    join(staleInReg).c_str(), kRegistryPath);
         if (!staleElse.empty())
-            printf("提示：%s 在服务端已不存在（已销毁）%s\n", join(staleElse).c_str(),
-                   (staleElse.size() == 1 && staleElse[0] == active)
-                       ? "（这只是服务端遗留的「当前虚拟机」记录，不在本地清单里）"
-                       : "");
+            printf("提示：%s 不在本工具清单里，框架也没有为它报告进程 PID（无磁盘镜像）\n",
+                   join(staleElse).c_str());
     }
     return 0;
 }
+
 
 //: 判断虚拟机在服务端是否还存在。
 //: 只能靠"磁盘镜像路径是否为空" —— 状态码 0 对"已停止"和"已销毁"是同一个值，
