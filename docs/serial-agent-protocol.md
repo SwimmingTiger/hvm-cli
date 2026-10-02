@@ -31,3 +31,36 @@ hdc shell "hilog -x | grep -a 'Invalid handshake'"
 
 注：agent 侧可用环境变量 `HVM_AGENT_MODE` / `HVM_AGENT_NAME` / `HVM_AGENT_PORT` 覆盖，
 便于在客户机里直接迭代（见 `scripts/hvm-serial-agent.py`）。
+
+---
+
+## 可直接读写的旁路通道（TCP，同一套帧协议）
+
+框架侧的串口握手协商仍有未解之处（`HandleConnectSerial` 只在连接建立那一次读一帧，
+且其调用/注册点在本 .so 内零引用，实测打开 Debug 后也未见 `connectionmode=` 日志，
+说明框架并未接受到连接）。为了能**实测地读/写 agent 的数据通道**，agent 增加了
+一条 TCP 旁路通道，用的就是同一套 7 字节帧格式：
+
+| 环境变量 | 作用 |
+|---|---|
+| `HVM_AGENT_TCP` | 监听端口（0 = 关闭）；例如 20001 |
+| `HVM_AGENT_TCP_ECHO` | 1 = 把 TCP 客户端发来的帧回显回去（便于在无框架参与时验证读方向） |
+
+工具：`scripts/agentctl.py`
+```sh
+python3 agentctl.py call 27        # 发一个 Call{methodID=27} 帧（等价 serial-write）
+python3 agentctl.py handshake      # 发 type=3 Handshake（用逆向出的两个必需串）
+python3 agentctl.py raw 0000...    # 发原始字节
+python3 agentctl.py listen 8       # 只收（等价 serial-read）
+```
+
+实测（clean3，客户机 Debian 12）：
+```
+设备侧  → Call{methodID=27} 9 字节: 00 00 00 02 01 00 03 10 1b
+设备侧  ← 应答            9 字节: 00 00 00 02 01 00 03 10 1b      ← 双向 ✓
+客户机  TCP→串口 9 字节 / 已回显 9 字节 / 已把 9 字节写入串口      ← 两侧日志均有 ✓
+```
+
+注：`/etc/hvm-agent.env` 由包装脚本 `/usr/local/sbin/hvm-agent-run.sh` 以
+`set -a`（自动 export）方式 source —— 少了 `set -a` 时只有显式 export 的变量才传进 agent，
+像 `HVM_AGENT_TCP` 就会静默失效（实测踩到）。

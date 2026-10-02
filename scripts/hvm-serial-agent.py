@@ -40,6 +40,8 @@ import sys
 import time
 import struct
 import select
+import socket
+import threading
 
 # 多个端口用逗号分隔。
 # ★ 默认把 stratovirt 暴露的 6 个 virtio-serial 口【全试一遍】——
@@ -59,6 +61,10 @@ GUEST_IP = os.environ.get("HVM_AGENT_IP", "172.16.100.2")
 HS_RETRY = float(os.environ.get("HVM_AGENT_HS_RETRY", "1.0"))
 # 端口读回 0 后的重连退避秒数（防止死循环刷屏）
 RECONNECT_DELAY = float(os.environ.get("HVM_AGENT_RECONNECT_DELAY", "3.0"))
+# 可选的 TCP 旁路通道：同一套帧协议，便于从宿主/设备侧直接读写（0 = 关闭）
+TCP_PORT = int(os.environ.get("HVM_AGENT_TCP", "0"))
+# 测试用：把 TCP 客户端发来的帧原样广播回去，便于在无框架参与时验证【读方向】通路
+TCP_ECHO = os.environ.get("HVM_AGENT_TCP_ECHO", "0") == "1"
 
 # MessageType（取自 LinkBase::SendMessage 各调用点的 mov w1, #N）：
 #   1 = Call（IService::CallMethodSync/CallMethodAsync 都用它）
@@ -229,9 +235,13 @@ def answer(method_id, params):
 #     → type=1 Call{methodID=1}（BootComplete）
 #   · 服务端 HandleConnectSerial 做 ReceiveMessage(sock,&type,&buf,3) 并把载荷
 #     ParseFromArray 成 Handshake —— 所以也可能是 type=3 + 裸 Handshake
+# ★ 顺序很重要：框架的 HandleConnectSerial 只在【连接建立那一次】读一帧并解析成 Handshake，
+#   解析失败就 return 0 且不再重试（实测）。所以第一帧【必须】是 type=3 的 Handshake。
+#   （最初 Windows agent 抓到的首帧是 type=1 Call{1}，但那是它自己 boot 后主动发的；
+#     对我们这种"等框架来连"的 agent，握手必须排第一。）
 HS_CANDIDATES = [
-    (MT_CALL,      enc_call(0, 1),   "type=1 Call{methodID=1}  (Windows 实测首帧)"),
     (MT_HANDSHAKE, enc_handshake(),  "type=3 Handshake{connectionMode,clientName}"),
+    (MT_CALL,      enc_call(0, 1),   "type=1 Call{methodID=1}  (Windows 实测首帧)"),
     (MT_CALL,      enc_call(0, 31),  "type=1 Call{methodID=31}"),
 ]
 if os.environ.get("HVM_AGENT_HS_ONLY_ID"):
@@ -303,6 +313,78 @@ def handle_buffered(fd, port, conn):
     return True
 
 
+_tcp_clients = []
+_tcp_lock = threading.Lock()
+
+
+def tcp_server(port):
+    """旁路通道：TCP 客户端可用同一套帧协议收发。
+    客户端发来的字节 = 直接写到串口（等价于 serial-write）；
+    串口收到的字节 = 广播给所有 TCP 客户端（等价于 serial-read）。"""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", port))
+    srv.listen(4)
+    log("TCP 旁路通道已监听 0.0.0.0:%d" % port)
+    while True:
+        try:
+            c, a = srv.accept()
+        except OSError:
+            time.sleep(1); continue
+        with _tcp_lock:
+            _tcp_clients.append(c)
+        log("TCP 客户端接入 %s:%d（共 %d 个）" % (a[0], a[1], len(_tcp_clients)))
+        threading.Thread(target=tcp_reader, args=(c, a), daemon=True).start()
+
+
+def tcp_reader(c, a):
+    buf = bytearray()
+    while True:
+        try:
+            d = c.recv(65536)
+        except OSError:
+            d = b""
+        if not d:
+            break
+        buf += d
+        while True:
+            if len(buf) < 7:
+                break
+            n = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]
+            if len(buf) < 7 + n:
+                break
+            frm = bytes(buf[:7 + n]); del buf[:7 + n]
+            log("TCP→串口 %d 字节: %s" % (len(frm), frm[:24].hex(" ")))
+            _to_serial.append(frm)
+            if TCP_ECHO:
+                tcp_broadcast(frm)
+                log("已回显 %d 字节给 TCP 客户端（读方向通路验证）" % len(frm))
+    with _tcp_lock:
+        if c in _tcp_clients:
+            _tcp_clients.remove(c)
+    try:
+        c.close()
+    except Exception:
+        pass
+    log("TCP 客户端断开 %s:%d" % (a[0], a[1]))
+
+
+_to_serial = []
+
+
+def tcp_broadcast(data):
+    with _tcp_lock:
+        for c in list(_tcp_clients):
+            try:
+                c.sendall(data)
+            except OSError:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+                _tcp_clients.remove(c)
+
+
 def main():
     log("agent 启动：ports=%s name=%s ip=%s 首帧重发间隔=%ss"
         % (",".join(PORTS), CLIENT_NAME, GUEST_IP, HS_RETRY))
@@ -313,6 +395,8 @@ def main():
             % (", ".join("/dev/" + n for n in present) if present else "（一个都没有！）"))
     except Exception as e:
         log("列 /dev 失败：%s" % e)
+    if TCP_PORT:
+        threading.Thread(target=tcp_server, args=(TCP_PORT,), daemon=True).start()
     conns = {}          # fd -> {port, buf, got, last_hs, hs_count}
     dead_until = {}     # port -> 在此时刻之前不要重开（读回 0 的端口退避）
 
@@ -363,6 +447,17 @@ def main():
                                 pass
                             del conns[fd]
 
+        # 2.9) 把 TCP 客户端发来的帧写进串口（等价 serial-write）
+        while _to_serial:
+            frm = _to_serial.pop(0)
+            peer = next(iter(conns), None)
+            if peer is not None:
+                try:
+                    os.write(peer, frm)
+                    log("已把 %d 字节写入串口" % len(frm))
+                except OSError as e:
+                    log("写串口失败: %s" % e)
+
         # 3) 收数据
         if not conns:
             continue
@@ -388,6 +483,7 @@ def main():
                     pass
                 del conns[fd]
                 continue
+            tcp_broadcast(chunk)
             c["buf"] += chunk
             if not handle_buffered(fd, c["port"], c):
                 try:
