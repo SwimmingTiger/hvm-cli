@@ -63,6 +63,10 @@ HS_RETRY = float(os.environ.get("HVM_AGENT_HS_RETRY", "1.0"))
 RECONNECT_DELAY = float(os.environ.get("HVM_AGENT_RECONNECT_DELAY", "3.0"))
 # 可选的 TCP 旁路通道：同一套帧协议，便于从宿主/设备侧直接读写（0 = 关闭）
 TCP_PORT = int(os.environ.get("HVM_AGENT_TCP", "0"))
+# 命令执行通道（hvm-cli exec / shell 用）：行协议，简单、可脚本化
+#   客户端发一行命令（以 \n 结尾）→ 服务端执行并把 stdout+stderr 回传，
+#   然后发一行哨兵 "\x00HVM-EXEC-END <退出码>\n" 表示结束。
+EXEC_PORT = int(os.environ.get("HVM_AGENT_EXEC", "0"))
 # 测试用：把 TCP 客户端发来的帧原样广播回去，便于在无框架参与时验证【读方向】通路
 TCP_ECHO = os.environ.get("HVM_AGENT_TCP_ECHO", "0") == "1"
 # 每个首帧候选连发几次再换下一个
@@ -385,6 +389,67 @@ def tcp_reader(c, a):
     log("TCP 客户端断开 %s:%d" % (a[0], a[1]))
 
 
+def exec_server(port):
+    import subprocess
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", port))
+    srv.listen(4)
+    log("命令执行通道已监听 0.0.0.0:%d" % port)
+    while True:
+        try:
+            c, a = srv.accept()
+        except OSError:
+            time.sleep(1); continue
+        log("exec 客户端接入 %s:%d" % (a[0], a[1]))
+        threading.Thread(target=exec_reader, args=(c, a), daemon=True).start()
+
+
+def exec_reader(c, a):
+    """裸 recv + 手动分行；不要用 makefile 混合 sendall（实测会卡死）。"""
+    import subprocess
+    buf = bytearray()
+    try:
+        while True:
+            d = c.recv(65536)
+            if not d:
+                break
+            buf += d
+            while b"\n" in buf:
+                line, _, rest = buf.partition(b"\n")
+                buf = bytearray(rest)
+                cmd = line.decode("utf-8", "replace").rstrip("\r")
+                if not cmd:
+                    continue
+                log("exec: %s" % cmd[:120])
+                try:
+                    r = subprocess.run(cmd, shell=True, capture_output=True, timeout=120,
+                                       stdin=subprocess.DEVNULL)
+                    out = r.stdout + r.stderr
+                    rc = r.returncode
+                except subprocess.TimeoutExpired:
+                    out = b"[hvm-agent] command timed out after 120s\n"
+                    rc = 124
+                except Exception as e:
+                    out = ("[hvm-agent] exec failed: %s\n" % e).encode()
+                    rc = 125
+                try:
+                    if out:
+                        c.sendall(out)
+                    c.sendall(b"\x00HVM-EXEC-END %d\n" % rc)
+                    log("exec 完成 rc=%d 输出 %d 字节" % (rc, len(out)))
+                except OSError as e:
+                    log("exec 回写失败: %s" % e)
+                    return
+    except OSError as e:
+        log("exec 读取失败: %s" % e)
+    try:
+        c.close()
+    except Exception:
+        pass
+    log("exec 客户端断开 %s:%d" % (a[0], a[1]))
+
+
 _to_serial = []
 
 
@@ -413,6 +478,8 @@ def main():
         log("列 /dev 失败：%s" % e)
     if TCP_PORT:
         threading.Thread(target=tcp_server, args=(TCP_PORT,), daemon=True).start()
+    if EXEC_PORT:
+        threading.Thread(target=exec_server, args=(EXEC_PORT,), daemon=True).start()
     conns = {}          # fd -> {port, buf, got, last_hs, hs_count}
     dead_until = {}     # port -> 在此时刻之前不要重开（读回 0 的端口退避）
 

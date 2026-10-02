@@ -3,6 +3,7 @@
 // 纯 C++ 实现：直接使用系统自带的 libvm_manager_kits.z.so，
 // 不需要 root、不需要 HAP。
 #include <cstdint>
+#include <iostream>       // exec/shell: std::cin/std::cout
 #include <cstdio>
 #include <dirent.h>
 #include <fcntl.h>
@@ -10,7 +11,10 @@
 #include <cctype>
 #include <fstream>
 #include <cstdlib>
-#include <unistd.h>   // getuid：用 uid/200000 推导 OS 账号 id
+#include <unistd.h>
+#include <sys/socket.h>   // exec/shell: 连客户机 agent 命令通道
+#include <netinet/in.h>   // sockaddr_in
+#include <arpa/inet.h>    // inet_pton   // getuid：用 uid/200000 推导 OS 账号 id
 #include <algorithm>   // sort/unique/remove/find（本地虚拟机清单）
 #include <fstream>     // 清单文件读写
 #include <chrono>      // vmlog -f 轮询
@@ -252,7 +256,9 @@ void usage() {
         "  ctor [选项]             仅构造 CfgInfo 并打印（不调服务，验证构造配方）\n"
         "  view-state <0|1|2>      上报 HapViewState（研究视图机制）\n"
         "  displays <id[,…]>       把显示器 id 列表交给服务端（同上）\n"
-        "  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
+        "  exec  <命令...> [--host H] [--port P]  在客户机里执行一条命令（走 agent 命令通道）\n"
+        "  shell [--host H] [--port P]             交互式执行命令（Ctrl-D 退出）\n"
+  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
         "  serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
         "  selftest                kit 加载自检\n"
         "  sha256 <文件> [线程数]  计算文件 SHA-256（内置实现、多线程预读）\n"
@@ -929,6 +935,49 @@ bool vmExists(Client &c, const std::string &name, std::string *diskOut = nullptr
 //: vms 无参时探测的"框架已知名字"。它只是一个**探测名单**，
 //: 不再充当任何命令的默认虚拟机名（见 Args::vm 的说明）。
 constexpr const char *kProbeVmNames[] = {hvm::kLinuxVm};
+// ---------------------------------------------------------------- hvm-cli exec / shell
+//: 客户机 agent 提供了一个命令执行通道（行协议）：
+//:   连接后发一行命令（以 \n 结尾）→ agent 执行 → 回传 stdout+stderr →
+//:   再发一行哨兵 "\x00HVM-EXEC-END <退出码>\n" 表示结束。
+//: 该通道由 guest agent 提供（环境变量 HVM_AGENT_EXEC，默认端口 20002），
+//: 走的是已打通的客户机通道；默认地址 172.16.100.2 是框架给客户机分配的网关地址。
+constexpr const char *kAgentExecHost = "172.16.100.2";
+constexpr int kAgentExecPort = 20002;
+// ★ 注意：哨兵以 NUL 开头，不能用 const char* + strlen（会得 0）——必须用 std::string 固定长度。
+static const std::string kExecEnd("\x00HVM-EXEC-END ", 14);
+
+static int agentConnect(const std::string &host, int port) {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    sockaddr_in sa{};
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(static_cast<uint16_t>(port));
+    if (::inet_pton(AF_INET, host.c_str(), &sa.sin_addr) != 1) { ::close(fd); return -1; }
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&sa), sizeof(sa)) != 0) { ::close(fd); return -1; }
+    return fd;
+}
+
+static int agentRunOnce(int fd, const std::string &cmd) {
+    std::string line = cmd + "\n";
+    if (::send(fd, line.data(), line.size(), 0) < 0) return -1000;
+    std::string buf;
+    char tmp[4096];
+    const std::size_t endLen = kExecEnd.size();
+    for (;;) {
+        std::size_t q = buf.find(kExecEnd);
+        if (q != std::string::npos) {
+            std::size_t e = buf.find('\n', q);
+            std::string code = buf.substr(q + endLen, (e == std::string::npos ? buf.size() : e) - q - endLen);
+            fwrite(buf.data(), 1, q, stdout);
+            fflush(stdout);
+            return std::atoi(code.c_str());
+        }
+        ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+        if (n <= 0) return -1001;
+        buf.append(tmp, static_cast<std::size_t>(n));
+    }
+}
+
 
 // ---------------------------------------------------------------- vm 子命令
 //: CfgInfo 是华为私有类型（无公开头文件），这里按逆向配方手工构造。
@@ -1092,6 +1141,37 @@ int cmdVm(Client &c, const std::vector<std::string> &pos) {
         printf("已上报 %zu 个显示 id:", ids.size());
         for (auto v : ids) printf(" %llu", static_cast<unsigned long long>(v));
         printf("\n");
+        return 0;
+    }
+
+    if (act == "exec" || act == "shell") {
+        std::string host = kAgentExecHost;
+        int port = kAgentExecPort;
+        std::string cmd;
+        for (std::size_t i = 0; i < pos.size(); ++i) {
+            if (pos[i] == "--host" && i + 1 < pos.size()) { host = pos[++i]; continue; }
+            if (pos[i] == "--port" && i + 1 < pos.size()) { port = std::atoi(pos[++i].c_str()); continue; }
+            if (!cmd.empty()) cmd += " ";
+            cmd += pos[i];
+        }
+        int fd = agentConnect(host, port);
+        if (fd < 0)
+            return fail("vm " + act, -1, "连不上客户机 agent 命令通道 " + host + ":" + std::to_string(port) +
+                                            "（客户机里需有 HVM_AGENT_EXEC=20002 的 agent）");
+        if (act == "exec") {
+            if (cmd.empty()) { ::close(fd); fprintf(stderr, "exec 需要命令，例如: hvm-cli exec \"uname -r\"\n"); return 2; }
+            int rc = agentRunOnce(fd, cmd);
+            ::close(fd);
+            if (rc < 0) return fail("vm exec", rc, "命令通道通信失败");
+            return rc;
+        }
+        fprintf(stderr, "已连接客户机 agent 命令通道 %s:%d（Ctrl-D 退出）\n", host.c_str(), port);
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            if (line.empty()) continue;
+            if (agentRunOnce(fd, line) < 0) { fprintf(stderr, "命令通道断开\n"); break; }
+        }
+        ::close(fd);
         return 0;
     }
 
@@ -1563,7 +1643,7 @@ int run(int argc, char **argv) {
     {
         static const char *kVmActs[] = {"create", "start", "destroy", "mount-cd", "unmount-cd",
                                         "range", "ctor", "view-state", "displays",
-                                        "serial-read", "serial-write", "import", "export"};
+                                        "serial-read", "serial-write", "import", "export", "exec", "shell"};
         for (const char *act : kVmActs) {
             if (cmd == act) {
                 std::vector<std::string> pos;
@@ -2142,6 +2222,8 @@ int run(int argc, char **argv) {
 }
 
 }  // namespace
+
+
 
 int main(int argc, char **argv) {
     // 先扫描一遍全局选项，便于 `hvm-cli info --json` 这类写法
