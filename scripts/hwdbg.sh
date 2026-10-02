@@ -1,7 +1,8 @@
 #!/bin/sh
 # hwdbg.sh —— 在鸿蒙 PC 沙箱内用 lldb 调试本机程序
 #
-# 背景：系统自带的 lldb-server 在当前身份下会 `ptrace failed: Permission denied`；
+# 背景： DevBox、Harmonybrew 和 OHOS-SDK 的 `lldb` / `lldb-server`
+#       在当前身份下会 `ptrace failed: Permission denied`；
 #       应用商店里的 CodeArts IDE（com.huawei.codearts）自带一个自包含的
 #       huawei-debug-lldb-server，
 #       可以正常拉起进程。它位于 CodeArts IDE 自己的沙箱里，

@@ -339,9 +339,10 @@ README 保留用户能感知的部分：`stop` 需要客户机配合、`force-st
 
 ## 10. 调试（lldb / hwdbg）
 
-系统自带的 lldb-server 在应用沙箱里 `ptrace` 会被拒。可改用**应用商店里的 CodeArts IDE**（`com.huawei.codearts`，
-注意与白名单一节提到的 `com.huawei.codearts.agent` 是两个应用）自带的 `huawei-debug-lldb-server`：它躺在 CodeArts IDE 自己的沙箱里，
-要在 **CodeArts IDE 的终端**里拷出来：
+DevBox、Harmonybrew 和 OHOS-SDK 的 `lldb` / `lldb-server` 在应用沙箱里 `ptrace` 会被拒。
+可改用**应用商店里的 CodeArts IDE**（`com.huawei.codearts`，
+注意与白名单一节提到的 `com.huawei.codearts.agent` 是两个应用）自带的 `huawei-debug-lldb-server`：
+它躺在 CodeArts IDE 自己的沙箱里，要在 **CodeArts IDE 的终端**里拷出来：
 
 ```console
 $ mkdir -p ~/.local/bin

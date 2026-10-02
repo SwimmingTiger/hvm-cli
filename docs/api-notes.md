@@ -317,7 +317,7 @@ vm_manager [CheckWinImgPath:175] not image
 
 ### 调试器：用华为自带的 lldb-server
 
-系统自带 `/data/service/hnp/bin/lldb-server` 在当前身份下会
+DevBox、Harmonybrew 和 OHOS-SDK 的 `lldb` / `lldb-server` 在当前身份下会
 `ptrace failed: Permission denied`（应用沙箱禁 ptrace），
 `hdc shell`（uid 2000）又处在另一个挂载命名空间、且 `/data/local/tmp` 不可执行。
 
