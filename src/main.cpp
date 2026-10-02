@@ -1445,7 +1445,11 @@ int run(int argc, char **argv) {
             else inGuest = false;
         }
         const std::size_t show = kept.size() > 20 ? kept.size() - 20 : 0;
-        for (std::size_t i = show; i < kept.size(); ++i) printf("%s\n", kept[i].c_str());
+        // ★ 历史这几行也必须过 demojibake：串口日志里的中文会被某一层
+        //   "按 Latin-1 解释、再按 UTF-8 编码"，跟随模式下新增内容走 emitVmLog（已修），
+        //   而这里若是原样打印，就会表现为「vmlog -f 开头乱码、后续新增正常」。
+        for (std::size_t i = show; i < kept.size(); ++i)
+            printf("%s\n", demojibake(kept[i]).c_str());
         fflush(stdout);
         // ★ 上面的 getline 是【读到 EOF】才退出的，此时流已置 failbit，
         //   直接 tellg() 会返回 -1（实测确认），于是下面每轮 seekg(-1) 都失败、
