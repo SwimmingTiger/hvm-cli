@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""vm_manager 客户机侧最小 guest-agent（跑在客户机里，对 /dev/vport2p1 收发）。
+"""vm_manager 客户机侧最小 guest-agent（跑在客户机里，对 virtio-serial 端口收发）。
 
 协议（全部由服务端 libvm_manager.z.so 逆向 + 内嵌 protobuf 描述符解出，见
 docs/serial-agent-protocol.md）：
@@ -22,19 +22,41 @@ docs/serial-agent-protocol.md）：
   AgentServiceAlive = 27   → 回 Bool{value:true}    （这直接决定虚拟机状态能否变成 1）
   GetIpv4Address    = 40   → 回 String{value:"<ip>"}
   其余一律回 Void（空 Result.response）
+
+【本版两处关键改动，针对"状态永远是 9"的实测症状】
+  1) 同时服务多个串口（默认 /dev/vport2p1 与 /dev/vport2p2）。
+     实测：Windows 客户机上框架连的是 virtio_serial1，而我们此前只开 vport2p1（serial0），
+     故先把两个口都服务起来，排除"串口号不对"。
+  2) 周期性重发首帧，直到该端口收到过任何一帧为止。
+     实测：框架侧串口连接是间歇性的（vmlog 里反复 connection opened/closed），
+     只在 open 时发一次首帧，很容易发在框架没监听的那一刻而永久丢失。
+     对照：Windows agent 的 link_base.cpp:153 是「read 0 bytes ... retry after 1s」——
+     它一直在重试，不会只试一次。
 """
 
+import errno
 import os
 import sys
 import time
 import struct
 import select
 
-PORT = os.environ.get("HVM_AGENT_PORT", "/dev/vport2p1")
+# 多个端口用逗号分隔。
+# ★ 默认把 stratovirt 暴露的 6 个 virtio-serial 口【全试一遍】——
+#   实测：只在 vport2p1 上发首帧（无论 type=1 Call{1} / type=3 Handshake / Call{31}）
+#   发 21 次以上，框架一个字节都不回；vport2p2 宿主端甚至没连。
+#   端口映射（stratovirt 命令行）：
+#     winbox_serial0 nr=1 → vport2p1 | winbox_serial1 nr=2 → vport2p2
+#     clipboard_vioser0 nr=3 → vport2p3 | gfscl nr=4 → vport2p4
+#     additions_vioser0 nr=5 → vport2p5 | additions_vioser1 nr=6 → vport2p6
+DEFAULT_PORTS = ",".join("/dev/vport2p%d" % i for i in range(1, 7))
+PORTS = [p.strip() for p in os.environ.get("HVM_AGENT_PORT", DEFAULT_PORTS).split(",") if p.strip()]
 LOG = os.environ.get("HVM_AGENT_LOG", "/var/log/hvm-serial-agent.log")
 CLIENT_NAME = os.environ.get("HVM_AGENT_NAME", "debian-guest")
 CONNECTION_MODE = os.environ.get("HVM_AGENT_MODE", "1")
 GUEST_IP = os.environ.get("HVM_AGENT_IP", "172.16.100.2")
+# 首帧重发间隔（秒）；设 0 表示不重发（回到旧行为）
+HS_RETRY = float(os.environ.get("HVM_AGENT_HS_RETRY", "1.0"))
 
 # MessageType（取自 LinkBase::SendMessage 各调用点的 mov w1, #N）：
 #   1 = Call（IService::CallMethodSync/CallMethodAsync 都用它）
@@ -143,9 +165,6 @@ def parse(buf):
 # ---------------------------------------------------------------- 组帧 / 解帧
 def frame(payload, mtype):
     n = len(payload)
-    b = [mtype & 0xFF,
-         (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF]
-    # 服务端顺序：b0=(len>>24) b1=(len>>16) b2=(len>>8) b3=len b4=type b5/b6=校验
     head = bytearray(7)
     head[0] = (n >> 24) & 0xFF
     head[1] = (n >> 16) & 0xFF
@@ -159,8 +178,12 @@ def frame(payload, mtype):
 
 
 def enc_call(call_id, method_id, params=b"", is_async=False):
-    return (f_varint(1, call_id) + f_varint(2, method_id)
-            + (f_bytes(3, params) if params else b"") + f_bool(4, is_async))
+    # 实测（Windows agent 第一帧 00 00 00 02 01 00 03 10 01，payload=10 01）：
+    # callID=0 与 async=false 都是 protobuf 默认值，必须【省略不编码】，否则长度对不上。
+    return ((f_varint(1, call_id) if call_id else b"")
+            + f_varint(2, method_id)
+            + (f_bytes(3, params) if params else b"")
+            + (f_bool(4, True) if is_async else b""))
 
 
 def enc_result(call_id, response=b"", error=0):
@@ -186,29 +209,6 @@ def dec_call(buf):
     return cid, mid, params
 
 
-# ---------------------------------------------------------------- 主循环
-def read_exact(fd, n, timeout=None):
-    """读满 n 字节。timeout=None 表示【一直等】—— 这点很关键：
-    主机可能长时间不发东西，绝不能因为"暂时没有数据"就关闭端口重开，
-    否则 virtio-serial 端口会反复下线/上线，主机拿不到稳定窗口。"""
-    got = bytearray()
-    t0 = time.time()
-    while len(got) < n:
-        if timeout is not None and time.time() - t0 > timeout:
-            return None
-        r, _, _ = select.select([fd], [], [], 1.0)
-        if not r:
-            continue
-        try:
-            chunk = os.read(fd, n - len(got))
-        except OSError:
-            return None
-        if not chunk:
-            return None
-        got += chunk
-    return bytes(got)
-
-
 def answer(method_id, params):
     """返回要放进 Result.response 的负载"""
     if method_id == 27:                       # AgentServiceAlive → Bool{true}
@@ -220,60 +220,174 @@ def answer(method_id, params):
     return b""
 
 
-def main():
-    log("agent 启动：port=%s name=%s ip=%s" % (PORT, CLIENT_NAME, GUEST_IP))
+# ---------------------------------------------------------------- 主循环
+# ---- 首帧候选：一次构建里轮换试，避免每猜一次就重建 ISO（约 10 分钟）----
+# 依据：
+#   · 实测抓到的 Windows agent 第一帧 = 00 00 00 02 01 00 03 10 01
+#     → type=1 Call{methodID=1}（BootComplete）
+#   · 服务端 HandleConnectSerial 做 ReceiveMessage(sock,&type,&buf,3) 并把载荷
+#     ParseFromArray 成 Handshake —— 所以也可能是 type=3 + 裸 Handshake
+HS_CANDIDATES = [
+    (MT_CALL,      enc_call(0, 1),   "type=1 Call{methodID=1}  (Windows 实测首帧)"),
+    (MT_HANDSHAKE, enc_handshake(),  "type=3 Handshake{connectionMode,clientName}"),
+    (MT_CALL,      enc_call(0, 31),  "type=1 Call{methodID=31}"),
+]
+if os.environ.get("HVM_AGENT_HS_ONLY_ID"):
+    # 只想固定发某一种时：HVM_AGENT_HS_ONLY_ID=1 → 只发 Call{methodID=1}
+    _only = int(os.environ["HVM_AGENT_HS_ONLY_ID"])
+    HS_CANDIDATES = [(MT_CALL, enc_call(0, _only), "type=1 Call{methodID=%d}" % _only)]
+
+
+def open_port(path):
+    """非阻塞打开 virtio-serial 端口。对端还没打开时 open 会阻塞，故必须 O_NONBLOCK。"""
+    fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    return fd
+
+
+def send_first_frame(fd, port, conn):
+    """轮换发送首帧候选，直到该端口收到过任何一帧为止。
+
+    为什么轮换：目前无法确定服务端 HandleConnectSerial 期望的第一帧到底是什么。
+    反汇编显示它做 ReceiveMessage(sock,&type,&buf,3) 然后 ParseFromArray 成 Handshake，
+    而实测抓到的 Windows 第一帧是 type=1 的 Call{methodID=1}。两种都可能，
+    与其每猜一次就重建一次 ISO（约 10 分钟），不如一次构建里轮换试。
+    """
+    idx = conn.get("hs_idx", 0) % len(HS_CANDIDATES)
+    mtype, payload, label = HS_CANDIDATES[idx]
+    conn["hs_idx"] = idx + 1
+    os.write(fd, frame(payload, mtype))
+    conn["last_hs"] = time.time()
+    conn["hs_count"] = conn.get("hs_count", 0) + 1
+    conn["hs_label"] = label
+    if conn["hs_count"] == 1:
+        log("[%s] 首帧已发出 #%d %s" % (port, idx + 1, label))
+    elif conn["hs_count"] % 3 == 0:
+        log("[%s] 已发 %d 次仍无回应，最近一次: #%d %s"
+            % (port, conn["hs_count"], idx + 1, label))
+
+
+def handle_buffered(fd, port, conn):
+    """从 conn['buf'] 中切出完整帧并应答；返回 False 表示端口应关闭"""
+    buf = conn["buf"]
     while True:
+        if len(buf) < 7:
+            return True
+        n = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3]
+        mtype = buf[4]
+        if n > (1 << 20):
+            log("[%s] 长度异常 %d，清空缓冲" % (port, n))
+            del buf[:]
+            return True
+        if len(buf) < 7 + n:
+            return True
+        head = bytes(buf[:7])
+        payload = bytes(buf[7:7 + n])
+        del buf[:7 + n]
+        conn["got"] = True
+        s = (head[0] + head[1] + head[2] + head[3] + head[4]) & 0xFFFF
+        if ((s >> 8) & 0xFF) != head[5] or (s & 0xFF) != head[6]:
+            log("[%s] 校验和不符：收到 %s，算出 %04x" % (port, head.hex(" "), s))
+        cid, mid, params = dec_call(payload)
+        log("[%s] 收到 type=%d len=%d callID=%d methodID=%d params=%s"
+            % (port, mtype, n, cid, mid, params[:64].hex(" ")))
+        resp = answer(mid, params)
         try:
-            fd = os.open(PORT, os.O_RDWR)
+            os.write(fd, frame(enc_result(cid, resp), MT_RESULT))
+            log("[%s] 已应答 callID=%d methodID=%d response=%d 字节"
+                % (port, cid, mid, len(resp)))
         except OSError as e:
-            log("打开 %s 失败：%s（2 秒后重试）" % (PORT, e))
-            time.sleep(2)
-            continue
-        log("已打开 %s，发送握手" % PORT)
-        try:
-            # ★ 关键：串口第一帧是【裸的 link::Handshake】，不套 Call 信封！
-            # 依据：Service::HandleConnectSerial 先构造 Handshake，再 ReceiveMessage 后
-            # 直接 ParseFromArray 到该 Handshake 对象；类型用它构造时用的 3。
-            os.write(fd, frame(enc_handshake(), MT_HANDSHAKE))
-            log("握手已发出 methodID=%d" % HS_ID)
-        except OSError as e:
-            log("握手发送失败：%s" % e)
-            os.close(fd)
-            time.sleep(2)
-            continue
-        while True:
-            head = read_exact(fd, 7)
-            if head is None:
-                log("读头失败/超时，重新打开端口")
-                break
-            n = (head[0] << 24) | (head[1] << 16) | (head[2] << 8) | head[3]
-            mtype = head[4]
-            s = (head[0] + head[1] + head[2] + head[3] + head[4]) & 0xFFFF
-            if ((s >> 8) & 0xFF) != head[5] or (s & 0xFF) != head[6]:
-                log("校验和不符：收到 %s，算出 %04x" % (head.hex(" "), s))
-            if n > 1 << 20:
-                log("长度异常 %d，放弃" % n)
-                break
-            payload = read_exact(fd, n) if n else b""
-            if payload is None:
-                log("读载荷失败")
-                break
-            cid, mid, params = dec_call(payload)
-            log("收到 type=%d len=%d callID=%d methodID=%d params=%s"
-                % (mtype, n, cid, mid, params[:64].hex(" ")))
-            resp = answer(mid, params)
+            log("[%s] 应答写入失败：%s" % (port, e))
+            return False
+    return True
+
+
+def main():
+    log("agent 启动：ports=%s name=%s ip=%s 首帧重发间隔=%ss"
+        % (",".join(PORTS), CLIENT_NAME, GUEST_IP, HS_RETRY))
+    # 诊断：把客户机里真实存在的 virtio-serial 设备列出来（省得靠猜端口号）
+    try:
+        present = sorted(n for n in os.listdir("/dev") if n.startswith("vport"))
+        log("客户机 /dev 下的 virtio-serial 设备: %s"
+            % (", ".join("/dev/" + n for n in present) if present else "（一个都没有！）"))
+    except Exception as e:
+        log("列 /dev 失败：%s" % e)
+    conns = {}          # fd -> {port, buf, got, last_hs, hs_count}
+
+    while True:
+        # 1) 补齐所有应打开的端口
+        have = {c["port"] for c in conns.values()}
+        for p in PORTS:
+            if p in have:
+                continue
             try:
-                os.write(fd, frame(enc_result(cid, resp), MT_RESULT))
-                log("已应答 callID=%d methodID=%d response=%d 字节"
-                    % (cid, mid, len(resp)))
+                fd = open_port(p)
             except OSError as e:
-                log("应答写入失败：%s" % e)
-                break
-        try:
-            os.close(fd)
-        except Exception:
-            pass
-        time.sleep(1)
+                # 对端未打开时这里会失败；静默重试，不刷屏
+                if not conns:
+                    log("[%s] 打开失败：%s（2 秒后重试）" % (p, e))
+                continue
+            conns[fd] = {"port": p, "buf": bytearray(), "got": False,
+                         "last_hs": 0.0, "hs_count": 0}
+            log("[%s] 已打开" % p)
+
+        if not conns:
+            time.sleep(2)
+            continue
+
+        # 2) 周期性重发首帧（直到该端口收到过任何一帧）
+        now = time.time()
+        if HS_RETRY > 0:
+            for fd, c in list(conns.items()):
+                if c["got"]:
+                    continue
+                if now - c["last_hs"] >= HS_RETRY:
+                    try:
+                        send_first_frame(fd, c["port"], c)
+                    except OSError as e:
+                        # ★ EAGAIN/EWOULDBLOCK 不是"端口坏了"：virtio-serial 在宿主端
+                        #   还没打开时，O_NONBLOCK 写会返回 EAGAIN。此时【绝不能关端口】——
+                        #   否则会陷入「打开→写失败→关闭→再打开」的每 0.5 秒死循环
+                        #   （实测踩到：/dev/vport2p2 一直刷 "Resource temporarily unavailable"）。
+                        if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                            c["last_hs"] = now      # 稍后再试，不关端口
+                        else:
+                            log("[%s] 写首帧失败：%s（重开）" % (c["port"], e))
+                            try:
+                                os.close(fd)
+                            except Exception:
+                                pass
+                            del conns[fd]
+
+        # 3) 收数据
+        if not conns:
+            continue
+        r, _, _ = select.select(list(conns), [], [], 0.5)
+        for fd in r:
+            c = conns.get(fd)
+            if c is None:
+                continue
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                # read 返回 0（对端关闭 virtio-serial）→ 关掉，下一轮重开
+                log("[%s] 端口断开（读回 0），稍后重开" % c["port"])
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+                del conns[fd]
+                continue
+            c["buf"] += chunk
+            if not handle_buffered(fd, c["port"], c):
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+                del conns[fd]
+
+        time.sleep(0.05)
 
 
 if __name__ == "__main__":
