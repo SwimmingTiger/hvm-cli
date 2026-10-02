@@ -65,12 +65,23 @@ RECONNECT_DELAY = float(os.environ.get("HVM_AGENT_RECONNECT_DELAY", "3.0"))
 TCP_PORT = int(os.environ.get("HVM_AGENT_TCP", "0"))
 # 测试用：把 TCP 客户端发来的帧原样广播回去，便于在无框架参与时验证【读方向】通路
 TCP_ECHO = os.environ.get("HVM_AGENT_TCP_ECHO", "0") == "1"
+# 每个首帧候选连发几次再换下一个
+HS_REPEAT = max(1, int(os.environ.get("HVM_AGENT_HS_REPEAT", "3")))
+# ★★★ 关键：Call 的 callID 【必须非零】。
+# 实测（注入验证）：callID=0 时框架构造的 Result 里 callID 也是 0，
+# protobuf 默认值不编码 ⟹ Result 序列化长度 = 0 ⟹ LinkBase::SendMessage 报
+# "message size exceeds limit, message send failed, size:0" ⟹ 框架永远回不了帧。
+# 改成非零后，框架立刻回了 type=2 的 Result（callID 与我们发的一致）✓✓
+CALL_ID = int(os.environ.get("HVM_AGENT_CALL_ID", "1"))
 
 # MessageType（取自 LinkBase::SendMessage 各调用点的 mov w1, #N）：
 #   1 = Call（IService::CallMethodSync/CallMethodAsync 都用它）
 #   2 = Result（DispatchAndReply 回应 Call 用它）
 #   3 = EstablishEventChannel
 MT_CALL = 1
+# ★★★ 实测：框架是否回帧取决于【收到的帧类型】——DispatchAndReply 只在 flags==0 时回，
+#     而 flags 就是 ReceiveMessage 写回的帧类型。所以 Call 帧要用 type=0 才会被应答。
+MT_CALL_REPLY = 0
 MT_RESULT = 2
 MT_HANDSHAKE = 3     # 串口连接后第一帧（裸 Handshake）用的类型，见 HandleConnectSerial
 # 握手用的 methodID：InitService 里只注册了 0 和 31，故做成环境变量便于就地迭代
@@ -239,10 +250,15 @@ def answer(method_id, params):
 #   解析失败就 return 0 且不再重试（实测）。所以第一帧【必须】是 type=3 的 Handshake。
 #   （最初 Windows agent 抓到的首帧是 type=1 Call{1}，但那是它自己 boot 后主动发的；
 #     对我们这种"等框架来连"的 agent，握手必须排第一。）
+# ★★ 只发 Handshake，且反复发 ★★
+# 实测（hilog Debug）：框架的 HandleConnectSerial 在连接建立那一次读【一帧】并解析成
+# Handshake；读到 Call（例如 7 字节头 + 2 字节载荷的 Call{methodID}）就解析失败、
+# 打 "Invalid handshake, op code: N" 然后 return false，【之后不再重试】。
+# 所以候选轮换是有害的：轮换迟早会让框架读到 Call。第一帧必须、且只能是 Handshake。
 HS_CANDIDATES = [
     (MT_HANDSHAKE, enc_handshake(),  "type=3 Handshake{connectionMode,clientName}"),
-    (MT_CALL,      enc_call(0, 1),   "type=1 Call{methodID=1}  (Windows 实测首帧)"),
-    (MT_CALL,      enc_call(0, 31),  "type=1 Call{methodID=31}"),
+    (MT_CALL_REPLY, enc_call(CALL_ID, 1),   "type=0 Call{callID=%d,methodID=1}  (BootComplete, 会被应答)" % CALL_ID),
+    (MT_CALL_REPLY, enc_call(CALL_ID, 16),  "type=0 Call{callID=%d,methodID=16} (能力列表, 会被应答)" % CALL_ID),
 ]
 if os.environ.get("HVM_AGENT_HS_ONLY_ID"):
     # 只想固定发某一种时：HVM_AGENT_HS_ONLY_ID=1 → 只发 Call{methodID=1}
@@ -264,16 +280,16 @@ def send_first_frame(fd, port, conn):
     而实测抓到的 Windows 第一帧是 type=1 的 Call{methodID=1}。两种都可能，
     与其每猜一次就重建一次 ISO（约 10 分钟），不如一次构建里轮换试。
     """
-    idx = conn.get("hs_idx", 0) % len(HS_CANDIDATES)
+    # 每个候选连发 HS_REPEAT 次再换下一个（握手必须先被框架读到并派发）
+    idx = (conn.get("hs_count", 0) // HS_REPEAT) % len(HS_CANDIDATES)
     mtype, payload, label = HS_CANDIDATES[idx]
-    conn["hs_idx"] = idx + 1
     os.write(fd, frame(payload, mtype))
     conn["last_hs"] = time.time()
     conn["hs_count"] = conn.get("hs_count", 0) + 1
     conn["hs_label"] = label
     if conn["hs_count"] == 1:
         log("[%s] 首帧已发出 #%d %s" % (port, idx + 1, label))
-    elif conn["hs_count"] % 3 == 0:
+    elif conn["hs_count"] % (3 * HS_REPEAT) == 0:
         log("[%s] 已发 %d 次仍无回应，最近一次: #%d %s"
             % (port, conn["hs_count"], idx + 1, label))
 

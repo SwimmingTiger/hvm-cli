@@ -64,3 +64,39 @@ python3 agentctl.py listen 8       # 只收（等价 serial-read）
 注：`/etc/hvm-agent.env` 由包装脚本 `/usr/local/sbin/hvm-agent-run.sh` 以
 `set -a`（自动 export）方式 source —— 少了 `set -a` 时只有显式 export 的变量才传进 agent，
 像 `HVM_AGENT_TCP` 就会静默失效（实测踩到）。
+
+---
+
+## ★★★ 打通框架串口通信的两个决定性条件（逆向 + 注入实验双重确认）
+
+框架的每帧处理路径（libvm_manager.z.so）：
+
+```
+Service::HandleEvent(0x2e5b58)
+    v11 = 3
+    ReceiveMessage(this, &v11, &buf, 0)      // ★ v11 被写入【收到的帧类型】
+    ParseFromArray(&call, buf, len)          // 解析成 Guest.protobuf.link.Call
+    DispatchAndReply(call, MsgSock*, /*flags=*/v11, this)
+DispatchAndReply(0x2e58dc)
+    (*(sock->vtable[3]))(sock, call, &result, &tmp)   // 处理并填 Result
+    … 只有 flags == 0 才走：LinkBase::SendMessage(sock, /*type=*/2, &result)
+```
+
+由此得出两个**必须同时满足**的条件：
+
+| # | 条件 | 依据（实测） |
+|---|---|---|
+| ① | **Call 的 `callID` 必须非零** | callID=0 是 protobuf 默认值、不编码 ⟹ 框架构造的 `Result` 里 callID 也是 0 ⟹ `Result` 序列化长度为 **0** ⟹ `LinkBase::SendMessage` 报 `message size exceeds limit, message send failed, size:0` 、`send result failed, errno:0`，**框架永远回不了帧**。把 callID 改成 7 后，**框架立刻回了 `type=2` 的 Result**（callID 与我们发的一致）|
+| ② | **Call 帧的 type 必须是 0** | `flags` 就是 `ReceiveMessage` 写回的帧类型；`DispatchAndReply` 只在 `flags == 0` 时回帧。我们先前用 type=1（Call 的枚举值），所以从未被应答 |
+
+满足后，在**真正的 `/dev/vport2p1`** 上观测到双向交换：
+```
+agent  → type=0 Call{callID=1, methodID=1}
+agent  ← type=2 Result{callID=1}          ← 框架应答
+agent  → type=2 Result{callID=1}          ← agent 也回，协议进入已连接状态
+```
+（agent 收到帧后 `got=True`，按设计停止重发首帧、转为被动监听 —— 日志停止增长是**正常现象**，
+不是卡死：`systemctl is-active` = active、进程数 1。）
+
+本机复现要点：agent 侧用 `HVM_AGENT_CALL_ID`（默认 1）与 Call 帧 type=0；
+`HVM_AGENT_QUIET=1` 可让 agent 只做 TCP 转发、便于受控注入实验。
