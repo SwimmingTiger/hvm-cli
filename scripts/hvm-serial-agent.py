@@ -49,7 +49,7 @@ import select
 #     winbox_serial0 nr=1 → vport2p1 | winbox_serial1 nr=2 → vport2p2
 #     clipboard_vioser0 nr=3 → vport2p3 | gfscl nr=4 → vport2p4
 #     additions_vioser0 nr=5 → vport2p5 | additions_vioser1 nr=6 → vport2p6
-DEFAULT_PORTS = ",".join("/dev/vport2p%d" % i for i in range(1, 7))
+DEFAULT_PORTS = os.environ.get("HVM_AGENT_DEFAULT_PORTS", "/dev/vport2p1")
 PORTS = [p.strip() for p in os.environ.get("HVM_AGENT_PORT", DEFAULT_PORTS).split(",") if p.strip()]
 LOG = os.environ.get("HVM_AGENT_LOG", "/var/log/hvm-serial-agent.log")
 CLIENT_NAME = os.environ.get("HVM_AGENT_NAME", "debian-guest")
@@ -57,6 +57,8 @@ CONNECTION_MODE = os.environ.get("HVM_AGENT_MODE", "1")
 GUEST_IP = os.environ.get("HVM_AGENT_IP", "172.16.100.2")
 # 首帧重发间隔（秒）；设 0 表示不重发（回到旧行为）
 HS_RETRY = float(os.environ.get("HVM_AGENT_HS_RETRY", "1.0"))
+# 端口读回 0 后的重连退避秒数（防止死循环刷屏）
+RECONNECT_DELAY = float(os.environ.get("HVM_AGENT_RECONNECT_DELAY", "3.0"))
 
 # MessageType（取自 LinkBase::SendMessage 各调用点的 mov w1, #N）：
 #   1 = Call（IService::CallMethodSync/CallMethodAsync 都用它）
@@ -312,12 +314,15 @@ def main():
     except Exception as e:
         log("列 /dev 失败：%s" % e)
     conns = {}          # fd -> {port, buf, got, last_hs, hs_count}
+    dead_until = {}     # port -> 在此时刻之前不要重开（读回 0 的端口退避）
 
     while True:
         # 1) 补齐所有应打开的端口
         have = {c["port"] for c in conns.values()}
         for p in PORTS:
             if p in have:
+                continue
+            if time.time() < dead_until.get(p, 0):
                 continue
             try:
                 fd = open_port(p)
@@ -361,6 +366,7 @@ def main():
         # 3) 收数据
         if not conns:
             continue
+        now2 = time.time()
         r, _, _ = select.select(list(conns), [], [], 0.5)
         for fd in r:
             c = conns.get(fd)
@@ -372,7 +378,10 @@ def main():
                 chunk = b""
             if not chunk:
                 # read 返回 0（对端关闭 virtio-serial）→ 关掉，下一轮重开
-                log("[%s] 端口断开（读回 0），稍后重开" % c["port"])
+                if now2 - c.get("last_dead", 0) > 10:
+                    log("[%s] 端口断开（读回 0），稍后重开" % c["port"])
+                c["last_dead"] = now2
+                dead_until[c["port"]] = time.time() + RECONNECT_DELAY
                 try:
                     os.close(fd)
                 except Exception:
