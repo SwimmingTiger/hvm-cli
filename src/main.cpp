@@ -258,6 +258,8 @@ void usage() {
         "  displays <id[,…]>       把显示器 id 列表交给服务端（同上）\n"
         "  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
         "  serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
+        "  exec  <命令...> [--host H] [--port P]  在客户机里执行一条命令（走 agent 命令通道）\n"
+        "  shell [--host H] [--port P]            交互式执行命令（Ctrl-D 退出）\n"
         "  selftest                kit 加载自检\n"
         "  sha256 <文件> [线程数]  计算文件 SHA-256（内置实现、多线程预读）\n"
         "  hash-name               迁移用的 Hash 名（未发起过迁移时为空）\n"
