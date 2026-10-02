@@ -3,7 +3,7 @@
 // 纯 C++ 实现：直接使用系统自带的 libvm_manager_kits.z.so，
 // 不需要 root、不需要 HAP。
 #include <cstdint>
-#include <iostream>       // exec/shell: std::cin/std::cout
+#include <iostream>       // exec/shell: std::cin
 #include <cstdio>
 #include <dirent.h>
 #include <fcntl.h>
@@ -12,9 +12,9 @@
 #include <fstream>
 #include <cstdlib>
 #include <unistd.h>
-#include <sys/socket.h>   // exec/shell: 连客户机 agent 命令通道
-#include <netinet/in.h>   // sockaddr_in
-#include <arpa/inet.h>    // inet_pton   // getuid：用 uid/200000 推导 OS 账号 id
+#include <sys/socket.h>   // exec/shell
+#include <netinet/in.h>
+#include <arpa/inet.h>   // getuid：用 uid/200000 推导 OS 账号 id
 #include <algorithm>   // sort/unique/remove/find（本地虚拟机清单）
 #include <fstream>     // 清单文件读写
 #include <chrono>      // vmlog -f 轮询
@@ -256,9 +256,7 @@ void usage() {
         "  ctor [选项]             仅构造 CfgInfo 并打印（不调服务，验证构造配方）\n"
         "  view-state <0|1|2>      上报 HapViewState（研究视图机制）\n"
         "  displays <id[,…]>       把显示器 id 列表交给服务端（同上）\n"
-        "  exec  <命令...> [--host H] [--port P]  在客户机里执行一条命令（走 agent 命令通道）\n"
-        "  shell [--host H] [--port P]             交互式执行命令（Ctrl-D 退出）\n"
-  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
+        "  serial-read  --name N [--chan C] [--type T] [--arg A]   读客户机通道\n"
         "  serial-write --name N --data TEXT [--chan C] [--type T] 写客户机通道\n"
         "  selftest                kit 加载自检\n"
         "  sha256 <文件> [线程数]  计算文件 SHA-256（内置实现、多线程预读）\n"
@@ -935,15 +933,15 @@ bool vmExists(Client &c, const std::string &name, std::string *diskOut = nullptr
 //: vms 无参时探测的"框架已知名字"。它只是一个**探测名单**，
 //: 不再充当任何命令的默认虚拟机名（见 Args::vm 的说明）。
 constexpr const char *kProbeVmNames[] = {hvm::kLinuxVm};
+
+
 // ---------------------------------------------------------------- hvm-cli exec / shell
-//: 客户机 agent 提供了一个命令执行通道（行协议）：
-//:   连接后发一行命令（以 \n 结尾）→ agent 执行 → 回传 stdout+stderr →
-//:   再发一行哨兵 "\x00HVM-EXEC-END <退出码>\n" 表示结束。
-//: 该通道由 guest agent 提供（环境变量 HVM_AGENT_EXEC，默认端口 20002），
-//: 走的是已打通的客户机通道；默认地址 172.16.100.2 是框架给客户机分配的网关地址。
+//: 客户机 agent 的命令执行通道（行协议）：发一行命令 -> agent 执行 ->
+//: 回传 stdout+stderr -> 哨兵 "\x00HVM-EXEC-END <退出码>\n" 表示结束。
+//: 由 guest agent 提供（HVM_AGENT_EXEC，默认 20002），走已打通的客户机通道。
 constexpr const char *kAgentExecHost = "172.16.100.2";
 constexpr int kAgentExecPort = 20002;
-// ★ 注意：哨兵以 NUL 开头，不能用 const char* + strlen（会得 0）——必须用 std::string 固定长度。
+// ★ 哨兵以 NUL 开头：不能用 const char* + strlen（会得 0），必须用 std::string 固定长度。
 static const std::string kExecEnd("\x00HVM-EXEC-END ", 14);
 
 static int agentConnect(const std::string &host, int port) {
@@ -977,7 +975,6 @@ static int agentRunOnce(int fd, const std::string &cmd) {
         buf.append(tmp, static_cast<std::size_t>(n));
     }
 }
-
 
 // ---------------------------------------------------------------- vm 子命令
 //: CfgInfo 是华为私有类型（无公开头文件），这里按逆向配方手工构造。
@@ -2222,8 +2219,6 @@ int run(int argc, char **argv) {
 }
 
 }  // namespace
-
-
 
 int main(int argc, char **argv) {
     // 先扫描一遍全局选项，便于 `hvm-cli info --json` 这类写法
