@@ -18,10 +18,14 @@
 #   scripts/hwdbg.sh ./hvm-cli [端口]                    # 启动并进入 lldb 交互
 #   scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue
 #
-# 给【被调试程序】传参：用 HVM_ARGS 环境变量（不要用 shell 包装脚本 ——
-# lldb-server 无法 execve 脚本，会报 "execve failed: Operation not permitted"）：
-#   HVM_ARGS="share add --vm clean6 /path name" \
-#       scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
+# 给【被调试程序】传参：在 -- 之后写（与 `lldb -- prog args` 同惯例）：
+#   scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt -- \
+#       share add --vm clean6 /path name
+#   （-- 之前是 lldb 的参数，-- 之后全是被调试程序的参数）
+#
+# 也可用环境变量 PROG_ARGS 作为后备（两者同时给时，-- 之后的优先）。
+# 注意：不要用 shell 包装脚本来传参 —— lldb-server 无法 execve 脚本，
+#       会报 "failed to launch ...: execve failed: Operation not permitted"。
 #
 # 注意：进程已由 lldb-server 预先拉起并停在动态链接器入口，
 #       所以下完断点要 `continue` 恢复，**不要用 `run`**（会重新拉起而冲突）。
@@ -50,17 +54,42 @@ case "$1" in
     [0-9]*) PORT=$1; shift ;;
 esac
 
+# 把 "$@" 在第一个 -- 处切开：  之前 → lldb 的参数；之后 → 被调试程序的参数。
+# 注意：必须逐个参数做 shell 转义后再拼，否则 `-o "br set -r X"` 这种带空格的
+#       参数会被拆散（实测会报 "Multiple possible REPL languages"）。
+shq() {
+    # 把单个参数转义成可安全放进 eval 的 shell 词
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"
+}
+LLDB_ARGS=""
+PROG_ARGS="${PROG_ARGS:-}"
+seen_dd=0
+if [ "$PROG_ARGS" != "" ]; then
+    PROG_ARGS=$(shq "$PROG_ARGS")
+fi
+for arg in "$@"; do
+    if [ "$seen_dd" = 0 ] && [ "$arg" = "--" ]; then
+        seen_dd=1
+        PROG_ARGS=""
+        continue
+    fi
+    if [ "$seen_dd" = 1 ]; then
+        PROG_ARGS="$PROG_ARGS $(shq "$arg")"
+    else
+        LLDB_ARGS="$LLDB_ARGS $(shq "$arg")"
+    fi
+done
+
 BUILD_DIR=$(dirname "$0")/../build
 mkdir -p "$BUILD_DIR"
 LOG="$BUILD_DIR/hwdbg.log"
 
-# HVM_ARGS：传给被调试程序的参数（按空白切分；需要引号请自行用 eval 场景避免）
-PROG_ARGS=${HVM_ARGS:-}
 # shellcheck disable=SC2086
-setsid nohup "$SERVER" gdbserver --log-file="$LOG" "127.0.0.1:$PORT" -- "$PROG" $PROG_ARGS \
+eval "setsid nohup \"\$SERVER\" gdbserver --log-file=\"\$LOG\" \"127.0.0.1:\$PORT\" -- \"\$PROG\" $PROG_ARGS" \
     >"$BUILD_DIR/hwdbg.out" 2>&1 </dev/null &
 SRV_PID=$!
 trap 'kill $SRV_PID 2>/dev/null || true' EXIT
 
 sleep 2
-exec lldb -o "gdb-remote 127.0.0.1:$PORT" "$@"
+# shellcheck disable=SC2086
+eval "exec lldb -o \"gdb-remote 127.0.0.1:\$PORT\" $LLDB_ARGS"
