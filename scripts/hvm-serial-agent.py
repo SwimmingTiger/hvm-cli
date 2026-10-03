@@ -234,6 +234,20 @@ def dec_call(buf):
 
 def answer(method_id, params):
     """返回要放进 Result.response 的负载"""
+    # ★★★ 决定性判别用：mid=34 = IsProcessNotExist(GuestAgent.String{value})
+    #   host2guest.proto: String{1: value string}
+    #   我们按【标记法】应答，用来证明"宿主发来的字符串真的到了客户机、且应答真的回得去"：
+    #     hvm-cli process-exist "HVM:xxx"  → 客户机看到标记 → 回 Bool{true} → 显示"存在"
+    #     hvm-cli process-exist "其他"      → 无标记 → 回 Bool{false} → 显示"不存在"
+    if method_id == 34:
+        val = _pb_str(params, 1)
+        log("★ mid=34 收到宿主字符串: %r" % val)
+        if val.startswith("HVM:"):
+            # 顺便把"待执行命令"记下来，下一步用来实现 exec
+            _dt_inbox.append(val[4:])
+            log("★ mid=34 命令已入队，队列长度 %d" % len(_dt_inbox))
+            return f_bool(1, True)
+        return f_bool(1, False)
     if method_id == 27:                       # AgentServiceAlive → Bool{true}
         return f_bool(1, True)
     if method_id == 40:                       # GetIpv4Address → String{ip}
@@ -242,6 +256,41 @@ def answer(method_id, params):
         return f_str(1, "02:00:00:00:00:01")
     return b""
 
+
+
+def _pb_varint(b, i):
+    r = 0; sh = 0
+    while True:
+        x = b[i]; i += 1
+        r |= (x & 0x7F) << sh
+        if not (x & 0x80):
+            return r, i
+        sh += 7
+
+
+def _pb_str(b, field):
+    """取 protobuf 里某个 string 字段（wire type 2），极简实现。"""
+    i = 0
+    while i < len(b):
+        try:
+            k, i = _pb_varint(b, i)
+        except Exception:
+            return ""
+        f, w = k >> 3, k & 7
+        if w == 2:
+            n, i = _pb_varint(b, i)
+            v = b[i:i + n]; i += n
+            if f == field:
+                return v.decode("utf-8", "replace")
+        elif w == 0:
+            _, i = _pb_varint(b, i)
+        else:
+            return ""
+    return ""
+
+
+# 宿主经 mid=34 送进来的命令（用于后续实现 exec）
+_dt_inbox = []
 
 # ---------------------------------------------------------------- 主循环
 # ---- 首帧候选：一次构建里轮换试，避免每猜一次就重建 ISO（约 10 分钟）----

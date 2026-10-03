@@ -18,6 +18,11 @@
 #   scripts/hwdbg.sh ./hvm-cli [端口]                    # 启动并进入 lldb 交互
 #   scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue
 #
+# 给【被调试程序】传参：用 HVM_ARGS 环境变量（不要用 shell 包装脚本 ——
+# lldb-server 无法 execve 脚本，会报 "execve failed: Operation not permitted"）：
+#   HVM_ARGS="share add --vm clean6 /path name" \
+#       scripts/hwdbg.sh ./hvm-cli 7799 -o "b main" -o continue -o bt
+#
 # 注意：进程已由 lldb-server 预先拉起并停在动态链接器入口，
 #       所以下完断点要 `continue` 恢复，**不要用 `run`**（会重新拉起而冲突）。
 #
@@ -49,7 +54,10 @@ BUILD_DIR=$(dirname "$0")/../build
 mkdir -p "$BUILD_DIR"
 LOG="$BUILD_DIR/hwdbg.log"
 
-setsid nohup "$SERVER" gdbserver --log-file="$LOG" "127.0.0.1:$PORT" -- "$PROG" \
+# HVM_ARGS：传给被调试程序的参数（按空白切分；需要引号请自行用 eval 场景避免）
+PROG_ARGS=${HVM_ARGS:-}
+# shellcheck disable=SC2086
+setsid nohup "$SERVER" gdbserver --log-file="$LOG" "127.0.0.1:$PORT" -- "$PROG" $PROG_ARGS \
     >"$BUILD_DIR/hwdbg.out" 2>&1 </dev/null &
 SRV_PID=$!
 trap 'kill $SRV_PID 2>/dev/null || true' EXIT
