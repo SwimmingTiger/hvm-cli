@@ -223,7 +223,8 @@ void usage() {
         "\n"
         "共享目录:\n"
         "  share list | share enable | share disable\n"
-        "  share add <宿主路径> <客机路径> | share remove <宿主路径> | share setup\n"
+        "  share add --vm <虚拟机> <宿主路径> <共享名>   （共享名不是路径，<=32 字符）\n"
+        "  share remove --vm <虚拟机> <宿主路径> | share setup --vm <虚拟机>\n"
         "\n"
         "网络:\n"
         "  net ip                     客户机 IPv4 地址\n"
@@ -1977,17 +1978,17 @@ int run(int argc, char **argv) {
             return 0;
         }
         if (act == "add") {
-            NEED_ARGS(3, "hvm-cli share add <宿主路径> <客机路径>");
+            NEED_ARGS(3, "hvm-cli share add --vm <虚拟机> <宿主路径> <共享名>");
             const std::string vm = resolveVm(c, a, "share add", false, true);
             if (vm.empty()) return 2;
             int rc = c.addSharedFolder(vm, a.pos[1], a.pos[2]);
             if (rc != 0) return fail(cmd, rc, "AddSharedFolder 失败");
             if (g_json) {
                 Json j("share add");
-                j.str("host", a.pos[1]).str("guest", a.pos[2]);
+                j.str("host", a.pos[1]).str("shareName", a.pos[2]);
                 printf("%s\n", j.ok().c_str());
             } else {
-                printf("已添加共享目录 %s -> %s\n", a.pos[1].c_str(), a.pos[2].c_str());
+                printf("已添加共享目录 %s（共享名 %s）\n", a.pos[1].c_str(), a.pos[2].c_str());
             }
             return 0;
         }
